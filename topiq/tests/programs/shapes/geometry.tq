@@ -1,0 +1,30 @@
+// The unit `main.tq` imports: types, functions, a constant and an object.
+#unit classical
+
+struct Point { x: i64, y: i64 }
+
+enum Shape {
+    Dot(Point),
+    Square { corner: Point, side: i64 },
+    Nothing,
+}
+
+let SCALE: const i64 = 3;
+
+let CALLS: u32 = 0;
+
+fn area(s: *Shape) -> i64 {
+    CALLS += 1;
+    match s {
+        Shape::Dot(_) => 0,
+        Shape::Square { side } => side * side,
+        Shape::Nothing => 0,
+    }
+}
+
+// Private to this unit: other units cannot name it.
+static fn helper() -> i64 { 1 }
+
+fn moved(p: Point, by: i64) -> Point {
+    Point { x: p.x + by * helper(), y: p.y + by }
+}

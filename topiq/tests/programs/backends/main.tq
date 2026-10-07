@@ -1,0 +1,158 @@
+// expect: exit 0
+// stdout: toy zero 1:4 2 none none kept refused read looped lifted R R B B N N N B B ok ok calls back
+// A device other than the simulator: a provider registered with `qpu`,
+// which runs each job its own way and gives back what was measured.
+#unit classical
+import circs;
+import qpu;
+
+// A toy device elsewhere: each device it opens measures every bit as its
+// description's `bit` parameter says, and counts the jobs it is given.
+struct Toy { bit: bool, jobs: u32 }
+
+let TOYS: [Toy] = [];
+
+fn open_toy(d: *const qpu::Desc) -> Result<usize, qpu::Error> {
+    let bit = match d.param("bit") {
+        Some(v) => str::eq(&v, "1"),
+        None => false,
+    };
+    TOYS.push(Toy { bit: bit, jobs: 0 });
+    Ok(TOYS.len() - 1)
+}
+
+// The one device `toy://zero` names, which measures every bit as 0 whatever
+// its description says.
+fn open_zero(d: *const qpu::Desc) -> Result<usize, qpu::Error> {
+    TOYS.push(Toy { bit: false, jobs: 0 });
+    Ok(TOYS.len() - 1)
+}
+
+// Every run of a job measures the same bits, so one outcome has every shot.
+fn run_toy(h: usize, job: *const qpu::Job) -> Result<qpu::Tally, qpu::Error> {
+    if job.doc.len() == 0 {
+        return Err(qpu::Error::BadArgument("a job without its document"));
+    }
+    TOYS[h].jobs += 1;
+    let bits: [bool] = [];
+    for _ in 0..job.circuit.bits {
+        bits.push(TOYS[h].bit);
+    }
+    let t = qpu::Tally { outcomes: [], counts: [] };
+    t.add(job.outcome(&bits)?, job.shots);
+    Ok(t)
+}
+
+fn toy(open: fn(*const qpu::Desc) -> Result<usize, qpu::Error>) -> qpu::Backend {
+    qpu::Backend { open: open, run: run_toy, distribution: None, reseed: None, estimate: None }
+}
+
+fn registering(at: *const [char]) {
+    match qpu::register(at, toy(open_toy)) {
+        Ok(_) => print("ok "),
+        Err(qpu::Error::Registered(_)) => print("R "),
+        Err(qpu::Error::BadArgument(_)) => print("B "),
+        Err(_) => print("? "),
+    }
+}
+
+fn connecting(desc: *const [char]) {
+    match qpu::connect(desc) {
+        Ok(_) => print("ok "),
+        Err(qpu::Error::NoDevice(_)) => print("N "),
+        Err(qpu::Error::BadArgument(_)) => print("B "),
+        Err(_) => print("? "),
+    }
+}
+
+fn main() -> i32 {
+    qpu::register("toy://", toy(open_toy)).unwrap();
+    qpu::register("toy://zero", toy(open_zero)).unwrap();
+
+    // the outcome the circuit gives for what the device measured
+    let ones = qpu::connect("toy://lab?bit=1").unwrap();
+    let (a, b) = ones.run(circs::bell, 0).unwrap();
+    if a && b { print("toy "); } else { print("sim "); }
+    // a backend registered at the path answers before the scheme's
+    let zero = qpu::connect("toy://zero?bit=1").unwrap();
+    let (c, d) = zero.run(circs::bell, 0).unwrap();
+    if !c && !d { print("zero "); } else { print("scheme "); }
+
+    // a sample is the device's own count
+    let o = qpu::RunOpts { shots: 4, seed: None };
+    let s = ones.sample(circs::bell, &o, 0).unwrap();
+    print(&tcon::emit(&s.len()));
+    print(":");
+    print(&tcon::emit(&s[0].count));
+    print(" ");
+    print(&tcon::emit(&TOYS[0].jobs));
+    print(" ");
+
+    // what the backend leaves out, the device cannot do
+    match ones.distribution(circs::bell, 0) {
+        Err(qpu::Error::Unsupported) => print("none "),
+        _ => print("some "),
+    }
+    match ones.estimate_stat(circs::mark, 0, 1) {
+        Err(qpu::Error::Unsupported) => print("none "),
+        _ => print("some "),
+    }
+    ones.reseed(7);
+
+    // a supplied operator is checked whatever the device
+    match ones.run(circs::kick, circs::mark, 0) {
+        Ok(_) => print("kept "),
+        Err(_) => print("failed "),
+    }
+    match ones.run(circs::kick, circs::spoil, 0) {
+        Err(qpu::Error::NotKept(_)) => print("refused "),
+        _ => print("ran "),
+    }
+    // a circuit's outcome is read off the bits the device measured, the
+    // corrections they control being the device's to apply, unless a bit
+    // is measured more than once or the circuit's structure depends on one
+    match ones.run(circs::teleport, 0) {
+        Ok(b) => { if b { print("read "); } else { print("misread "); } }
+        Err(_) => print("unread "),
+    }
+    match ones.run(circs::count, 3) {
+        Err(qpu::Error::Unsupported) => print("looped "),
+        Ok(n) => { print(&tcon::emit(&n)); print(" "); }
+        Err(_) => print("failed "),
+    }
+    match ones.run(circs::lifted, 0) {
+        Err(qpu::Error::Unsupported) => print("lifted "),
+        _ => print("read "),
+    }
+
+    // where a backend may be registered, and what a description must name
+    registering("toy://");
+    registering("sim://exact");
+    registering("toy");
+    registering("toy://x?bit=1");
+    connecting("nowhere://x");
+    connecting("sim://other");
+    connecting("plain");
+    connecting("sim://exact?seed=x1");
+    connecting("sim://exact?colour=red");
+    connecting("sim://exact?seed=clock");
+    connecting("sim://exact?seed=18446744073709551615");
+
+    // calling a circuit handle runs on the device chosen for calls
+    qpu::use_for_calls(&ones);
+    let before = TOYS[0].jobs;
+    let all = true;
+    for i in 0..5 {
+        if !circs::plus(0) { all = false; }
+    }
+    if all && TOYS[0].jobs == before + 5 { print("calls "); } else { print("sim "); }
+    let sim = qpu::connect("sim://exact").unwrap();
+    qpu::use_for_calls(&sim);
+    let count = 0;
+    for i in 0..8 {
+        if circs::plus(0) { count = count + 1; }
+    }
+    if count > 0 && count < 8 { print("back"); } else { print("stuck"); }
+    print("\n");
+    0
+}

@@ -1,0 +1,56 @@
+// expect: exit 42
+// stdout: 3 remainder 2
+#unit classical
+
+type Meters = u32;
+type Span = (Meters, Meters);
+
+struct Box2 { w: Meters, h: Meters }
+
+fn print_u64(n: u64) {
+    if n >= 10 { print_u64(n / 10); }
+    let digit = ["0123456789"[(n % 10) as usize]];
+    print(&digit);
+}
+
+// Two results come back as one value, taken apart by the caller.
+fn divide(a: i32, b: i32) -> (i32, i32) { (a / b, a % b) }
+
+fn nothing() -> () { () }
+
+fn widen(s: Span) -> Span {
+    let (lo, hi) = s;
+    (lo, hi + 1)
+}
+
+fn main() -> i32 {
+    let (q, r) = divide(17, 5);
+    print_u64(q as u64);
+    print(" remainder ");
+    print_u64(r as u64);
+    print("\n");
+
+    // Every name a pattern binds may be assigned.
+    let (a, b) = (10, 20);
+    a += 2;
+    b -= 2;
+
+    // A pattern nests, and a structure is taken apart the same way.
+    let ((one, two), three) = ((1, 2), 3);
+    let Box2 { w, h } = Box2 { w: 2, h: 3 };
+
+    // The empty tuple is a value, and `()` is its type.
+    nothing();
+    let unit: () = ();
+    let (lo, hi) = widen((4, 5));
+
+    match (q, r) {
+        (3, 2) => {}
+        _ => { return 1; }
+    }
+    if lo != 4 || hi != 6 { return 2; }
+    let total = a + b + one + two + three + (w * h) as i32;
+    if total != 42 { return total as i32; }
+    let _ = unit;
+    total
+}

@@ -1,0 +1,41 @@
+// Oracle algorithms of the `algo` library, and the judgement of kickback.
+#unit quantum
+import gates;
+import algo;
+import judge;
+
+// Two-bit oracles, one constant and one balanced, and a three-bit one
+// computing the parity of `q & 101`.
+[entry]
+fn always(q: *[qubit; 2], y: *qubit) { x(y); }
+
+[entry]
+fn second_bit(q: *[qubit; 2], y: *qubit) { cx(&q[1], y); }
+
+[entry]
+fn parity101(q: *[qubit; 3], y: *qubit) {
+    cx(&q[0], y);
+    cx(&q[2], y);
+}
+
+[entry]
+fn dj(oracle: fn(*[qubit; 2], *qubit)) -> algo::Guess { algo::deutsch_jozsa(oracle) }
+
+[entry]
+fn bv(oracle: fn(*[qubit; 3], *qubit)) -> [bool; 3] { algo::bernstein_vazirani(oracle) }
+
+// The controlled flip, kicked back, is `z`: over the computational pair it
+// moves no point and gives |1> the phase π.
+fn mark(c: *qubit, t: *qubit) { cx(c, t); }
+
+[cover: gates::T01]
+[expect: contract = cyc(0, 4)]
+fn kicked(q: *[qubit; 1]) { algo::kickback(mark, &q[0]); }
+
+@static_assert(
+    match @judgment(kicked).contract {
+        judge::ContractClass::Cyc(s) => s.len() == 2 && s[0] == phase::<48>::of(0) && s[1] == phase::<48>::of(24),
+        _ => false,
+    },
+    "kickback through the controlled flip is z"
+);

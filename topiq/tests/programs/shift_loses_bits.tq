@@ -1,0 +1,11 @@
+// expect: abort RA01 at 6
+// A left shift that pushes set bits out of the value.
+#unit classical
+
+fn double(x: u8, n: u8) -> u8 {
+    x << n
+}
+
+fn main() -> i32 {
+    double(3, 7) as i32
+}

@@ -1,0 +1,11 @@
+// expect: abort RA02 at 6
+// Division by a zero only known at run time.
+#unit classical
+
+fn average(total: u32, count: u32) -> u32 {
+    total / count
+}
+
+fn main() -> i32 {
+    average(100, 0) as i32
+}

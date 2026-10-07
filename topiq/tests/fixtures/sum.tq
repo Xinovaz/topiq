@@ -1,0 +1,8 @@
+// Generics bounded by introspection rather than by traits.
+#unit classical
+
+fn sum<T>(xs: *[T]) -> T where @has_method(T, "$add") && @has_method(T, "$copy") {
+    let acc = xs[0];
+    for i in 1..xs.len() { acc = acc + xs[i]; }
+    acc
+}

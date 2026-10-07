@@ -1,0 +1,408 @@
+//! The `module` library: compiled Topiq code loaded while a program runs.
+//!
+//! A module is built with `tqc build --module`, into a library the operating
+//! system loads. It carries a copy of every unit it uses, and a descriptor
+//! saying what it holds; the program carries one too. `load` checks the two
+//! against each other as the linker checks units linked together: the same
+//! edition of the language, the same layout for every type both hold, and no
+//! method added to an `[open]` type by both. Only then do the module's
+//! initialisers run, in the order its units import each other.
+//!
+//! `load` also takes a circuit archive, `.tqar`, which `tqc build --archive`
+//! writes, or a quantum unit's `.tqu`: circuits alone, with no code to run.
+//! Every circuit a module holds, in either form, carries its judgement, so
+//! `judge::check` is meaningful on circuits the program was never compiled
+//! against.
+#unit classical
+
+/// A module loaded into the program: a library the system loaded, by its
+/// handle and its descriptor's address, or circuits read from a file, for
+/// which both are zero. Its circuits are read when it is loaded.
+struct Module { handle: i64, desc: usize, circuits: [Circuit], judgments: [judge::Judgment?] }
+
+/// A circuit a module holds: its operator's name, `unit::operator`, its
+/// signature, and its document.
+struct Circuit { name: string, sig: string, doc: string }
+
+/// Why a module could not be loaded or unloaded.
+enum Error {
+    /// Nothing loadable is at the path.
+    NotFound,
+    /// What is there is not a module this program can load.
+    Malformed,
+    /// The module was compiled for another edition of the language: this one.
+    VersionMismatch(u32),
+    /// The module and the program lay this type out differently.
+    LayoutMismatch(string),
+    /// The module adds this method, `Type::name`, which the program or a
+    /// module loaded before already adds.
+    DuplicateMethod(string),
+    /// This system cannot load modules.
+    Unsupported,
+}
+
+/// What each image records about itself. The compiler writes these; their
+/// layout is fixed.
+struct Descriptor {
+    edition: usize,
+    init: usize,
+    symbols: *[SymbolRecord],
+    types: *[TypeRecord],
+    methods: *[MethodRecord],
+    circuits: *[CircuitRecord],
+}
+struct SymbolRecord { name: *[char], sig: *[char], code: usize }
+struct TypeRecord { name: *[char], digest: *[char], table: usize }
+struct MethodRecord { owner: *[char], name: *[char] }
+struct CircuitRecord { name: *[char], sig: *[char], doc: *[char] }
+
+/// The descriptors of the modules loaded.
+let LOADED: [usize] = [];
+
+/// Loads the module at `path`, checks it against the program and the modules
+/// already loaded, and runs its initialisers. A path ending `.tqar` or `.tqu`
+/// is read as circuits.
+fn load(path: *const [char]) -> Result<Module, Error> {
+    if ends_with(path, ".tqar") || ends_with(path, ".tqu") {
+        return load_circuits(path);
+    }
+    let wide = wide(path)?;
+    let handle = __module_open(&wide);
+    if handle < 0 {
+        // the system's code for a file that is not a library it can load
+        if -handle == 193 {
+            return Err(Error::Malformed);
+        }
+        return Err(Error::NotFound);
+    }
+    let name = str::to_utf8("topiq_module");
+    name.push(0);
+    let addr = __module_find(handle, &name);
+    if addr == 0 {
+        return refuse(handle, Error::Malformed);
+    }
+    let d = __descriptor(addr);
+    let host = __descriptor(__host_descriptor());
+    if d.edition != host.edition {
+        return refuse(handle, Error::VersionMismatch(d.edition as u32));
+    }
+    let others: [usize] = [__host_descriptor()];
+    for l in &LOADED {
+        others.push(*l);
+    }
+    for o in &others {
+        let other = __descriptor(*o);
+        for t in d.types {
+            for u in other.types {
+                if str::eq(t.name, u.name) && !str::eq(t.digest, u.digest) {
+                    return refuse(handle, Error::LayoutMismatch(t.name));
+                }
+            }
+        }
+        for m in d.methods {
+            for n in other.methods {
+                if str::eq(m.owner, n.owner) && str::eq(m.name, n.name) {
+                    let both = string::from(m.owner) + "::" + m.name;
+                    return refuse(handle, Error::DuplicateMethod(both));
+                }
+            }
+        }
+    }
+    let circuits: [Circuit] = [];
+    for c in d.circuits {
+        circuits.push(Circuit { name: c.name, sig: c.sig, doc: c.doc });
+    }
+    let judgments = match judgments_of(&circuits) {
+        Ok(j) => j,
+        Err(why) => { return refuse(handle, why); }
+    };
+    LOADED.push(addr);
+    if d.init != 0 {
+        __call_void(d.init);
+    }
+    Ok(Module { handle: handle, desc: addr, circuits: circuits, judgments: judgments })
+}
+
+/// Reads the circuits of the archive or quantum unit at `path`. An archive
+/// names each circuit in full, `unit::operator`; a unit names its own
+/// operators, which are qualified by its name.
+static fn load_circuits(path: *const [char]) -> Result<Module, Error> {
+    let text = match fs::read(path) {
+        Ok(t) => t,
+        Err(fs::Error::NotFound) => { return Err(Error::NotFound); }
+        Err(_) => { return Err(Error::Malformed); }
+    };
+    let doc = match tcon::parse_dyn(&text) {
+        Ok(v) => v,
+        Err(_) => { return Err(Error::Malformed); }
+    };
+    let edition = match field(&doc, "edition") {
+        Some(v) => match v {
+            tcon::Value::Int(e) => e,
+            _ => { return Err(Error::Malformed); }
+        },
+        None => { return Err(Error::Malformed); }
+    };
+    let host = __descriptor(__host_descriptor());
+    if edition < 0 || edition as usize != host.edition {
+        return Err(Error::VersionMismatch(edition as u32));
+    }
+    let circuits: [Circuit] = [];
+    match list_field(&doc, "members") {
+        Some(members) => {
+            for m in members {
+                circuits.push(circuit_of(m, "")?);
+            }
+        }
+        None => {
+            let unit = text_field(&doc, "unit")?;
+            match list_field(&doc, "circuits") {
+                Some(entries) => {
+                    for e in entries {
+                        circuits.push(circuit_of(e, &unit)?);
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+    let judgments = judgments_of(&circuits)?;
+    Ok(Module { handle: 0, desc: 0, circuits: circuits, judgments: judgments })
+}
+
+/// One circuit of an archive's `members` or a unit's `circuits`, its name
+/// qualified by `unit` unless that is empty.
+static fn circuit_of(v: *const tcon::Value, unit: *const [char]) -> Result<Circuit, Error> {
+    let name = text_field(v, "name")?;
+    let full = if unit.len() > 0 { string::from(unit) + "::" + name } else { name };
+    Ok(Circuit { name: full, sig: text_field(v, "sig")?, doc: text_field(v, "document")? })
+}
+
+/// The judgement each circuit's document carries, if it carries one.
+static fn judgments_of(circuits: *const [Circuit]) -> Result<[judge::Judgment?], Error> {
+    let out: [judge::Judgment?] = [];
+    for c in circuits {
+        let doc = match tcon::parse_dyn(&c.doc) {
+            Ok(v) => v,
+            Err(_) => { return Err(Error::Malformed); }
+        };
+        match field(&doc, "judgment") {
+            Some(v) => match v {
+                tcon::Value::Null => out.push(None),
+                _ => match tcon::bind::<judge::Judgment>(v) {
+                    Ok(j) => out.push(Some(j)),
+                    Err(_) => { return Err(Error::Malformed); }
+                },
+            },
+            None => out.push(None),
+        }
+    }
+    Ok(out)
+}
+
+/// The field `name` of the object `v`.
+static fn field(v: *const tcon::Value, name: *const [char]) -> (*const tcon::Value)? {
+    match v {
+        tcon::Value::Obj(pairs) => {
+            for p in pairs {
+                if str::eq(&p.0, name) {
+                    return Some(&p.1);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// The text field `name` of the object `v`.
+static fn text_field(v: *const tcon::Value, name: *const [char]) -> Result<string, Error> {
+    match field(v, name) {
+        Some(f) => match f {
+            tcon::Value::Str(s) => Ok(clone(s)),
+            _ => Err(Error::Malformed),
+        },
+        None => Err(Error::Malformed),
+    }
+}
+
+/// The list field `name` of the object `v`.
+static fn list_field(v: *const tcon::Value, name: *const [char]) -> (*const [tcon::Value])? {
+    match field(v, name) {
+        Some(f) => match f {
+            tcon::Value::Arr(items) => Some(items),
+            _ => None,
+        },
+        None => None,
+    }
+}
+
+/// Whether `s` ends with `end`.
+static fn ends_with(s: *const [char], end: *const [char]) -> bool {
+    if s.len() < end.len() {
+        return false;
+    }
+    let at = s.len() - end.len();
+    for i in 0..end.len() {
+        if s[at + i] != end[i] {
+            return false;
+        }
+    }
+    true
+}
+
+impl Module {
+    /// The function the module offers as `name`, written `unit::function`,
+    /// as an address to call with `invoke::<Sig>`. `None` when there is none
+    /// of that name, or when its signature is not `Sig`, so that a wrong
+    /// `Sig` is found here rather than in a call that would go wrong.
+    fn symbol<Sig>(self: *const Module, name: *const [char]) -> (*void)? {
+        let d = __descriptor(self.desc);
+        for s in d.symbols {
+            if str::eq(s.name, name) {
+                if !str::eq(s.sig, @name_of(Sig)) {
+                    return None;
+                }
+                // the address carries this program's table for `Sig`, which
+                // is what `invoke::<Sig>` checks
+                let p: *void = @from_raw_parts(s.code, @typeinfo(Sig));
+                return Some(p);
+            }
+        }
+        None
+    }
+
+    /// The run-time type information of the type the module holds as
+    /// `name`, when the module made it. The name is qualified by its unit,
+    /// as `shapes::Circle`, or not, as `Circle`, which then names the first
+    /// of the module's types of that name.
+    fn typeinfo(self: *const Module, name: *const [char]) -> (*const TypeInfo)? {
+        let d = __descriptor(self.desc);
+        for t in d.types {
+            if names(t.name, name) {
+                if t.table == 0 {
+                    return None;
+                }
+                let ti: *const TypeInfo = @from_raw_parts(t.table, @typeinfo(TypeInfo));
+                // a table no unit made is blank, with no name
+                if ti.name.len() == 0 {
+                    return None;
+                }
+                return Some(ti);
+            }
+        }
+        None
+    }
+
+    /// The circuit the module holds as `name`, written `unit::operator`, as a
+    /// handle to run. `None` when there is none of that name, or when its
+    /// signature is not `Sig`, so that a wrong `Sig` is found here rather
+    /// than when the circuit runs.
+    fn circuit<Sig>(self: *Module, name: *const [char]) -> (circuit<Sig>)? {
+        for c in &self.circuits {
+            if str::eq(&c.name, name) {
+                if !str::eq(&c.sig, @name_of(Sig)) {
+                    return None;
+                }
+                let h: circuit<Sig> = __circuit_of(&c.doc);
+                return Some(h);
+            }
+        }
+        None
+    }
+
+    /// The judgement of the circuit the module holds as `name`, as the
+    /// module recorded it. `None` when there is no such circuit, or it
+    /// carries no judgement.
+    fn judgment(self: *const Module, name: *const [char]) -> (*const judge::Judgment)? {
+        for i in 0..self.circuits.len() {
+            if str::eq(&self.circuits[i].name, name) {
+                return match &self.judgments[i] {
+                    Some(j) => {
+                        let p: *const judge::Judgment = j;
+                        Some(p)
+                    }
+                    None => None,
+                };
+            }
+        }
+        None
+    }
+
+    /// Unloads the module. Every address, reference, table and circuit
+    /// handle obtained from it is then no longer valid, and using one is
+    /// undefined.
+    fn unload(self: Module) -> Result<(), Error> {
+        // circuits read from a file hold nothing of the system's
+        if self.desc == 0 {
+            return Ok(());
+        }
+        let kept: [usize] = [];
+        for l in &LOADED {
+            if *l != self.desc {
+                kept.push(*l);
+            }
+        }
+        LOADED = kept;
+        if __module_close(self.handle) {
+            Ok(())
+        } else {
+            Err(Error::Malformed)
+        }
+    }
+}
+
+/// Whether `wanted` names the type recorded as `record`: the qualified name
+/// itself, or its last part.
+static fn names(record: *const [char], wanted: *const [char]) -> bool {
+    if str::eq(record, wanted) {
+        return true;
+    }
+    for c in wanted {
+        if *c == ':' {
+            return false;
+        }
+    }
+    let (r, w) = (record.len(), wanted.len());
+    if r < w + 2 || record[r - w - 1] != ':' || record[r - w - 2] != ':' {
+        return false;
+    }
+    for i in 0..w {
+        if record[r - w + i] != wanted[i] {
+            return false;
+        }
+    }
+    true
+}
+
+/// Unloads a module that failed a check, giving why.
+static fn refuse(handle: i64, why: Error) -> Result<Module, Error> {
+    __module_close(handle);
+    Err(why)
+}
+
+/// The descriptor at `addr`. Not `static`: `Module.symbol`, which uses it,
+/// is generic, so its instances are made in the units that call it.
+fn __descriptor(addr: usize) -> *const Descriptor {
+    @from_raw_parts(addr, @typeinfo(Descriptor))
+}
+
+/// `path` in UTF-16, ended with a zero, as the system takes it.
+static fn wide(path: *const [char]) -> Result<[u16], Error> {
+    let out: [u16] = [];
+    for ch in path {
+        let c = (*ch) as u32;
+        if c == 0 {
+            return Err(Error::NotFound);
+        }
+        if c < 65536 {
+            out.push(c as u16);
+        } else {
+            let v = c - 65536;
+            out.push((55296 + v / 1024) as u16);
+            out.push((56320 + v % 1024) as u16);
+        }
+    }
+    out.push(0);
+    Ok(out)
+}

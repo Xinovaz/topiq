@@ -1,0 +1,29 @@
+// expect: exit 0
+// `rotate_left`, `rotate_right` and `swap`.
+#unit classical
+
+struct Named { name: [char], n: i32 }
+
+fn main() -> i32 {
+    // rotation brings back the bits it pushes off
+    if rotate_left(0b1001_0110u8, 3) != 0b1011_0100 { return 1; }
+    if rotate_right(0b1001_0110u8, 3) != 0b1101_0010 { return 2; }
+    if rotate_left(0x12345678u32, 32) != 0x12345678 { return 3; }
+    if rotate_left(0x12345678u32, 36) != 0x23456781 { return 4; }
+    // a signed value rotates its bits, not its sign
+    if rotate_left(-128i8, 1) != 1 { return 5; }
+    if rotate_right(1i8, 1) != -128 { return 6; }
+    if rotate_right(rotate_left(-37i16, 5), 5) != -37 { return 7; }
+
+    let a = 3;
+    let b = 4;
+    swap(&a, &b);
+    if a != 4 || b != 3 { return 8; }
+
+    // values that own storage change places without a copy
+    let p = Named { name: clone("left"), n: 1 };
+    let q = Named { name: clone("right"), n: 2 };
+    swap(&p, &q);
+    if p.n != 2 || q.n != 1 || p.name.len() != 5 || q.name.len() != 4 { return 9; }
+    0
+}

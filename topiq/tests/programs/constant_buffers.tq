@@ -1,0 +1,45 @@
+// expect: exit 0
+// stdout: ab ab abab! xyz 3 / ab 80 / 2 1
+// Constants holding growable arrays: their buffers are in the program, and
+// every use of one by value is a copy the program owns.
+#unit classical
+
+struct Cfg { host: [char], port: u16, tags: [[char]] }
+
+let K: const Cfg = Cfg { host: ['a', 'b'], port: 80, tags: [['x', 'y', 'z'], ['w']] };
+let NAMES: const [[char]] = [['a'], ['b', 'c']];
+
+fn show(n: i64) {
+    if n >= 10 { show(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+fn main() -> i32 {
+    let a = clone(&K);
+    print(&a.host);
+    print(" ");
+    let b = K;
+    print(&b.host);
+    print(" ");
+    b.host.push('!');
+    let h = K.host;
+    print(&h);
+    print(&b.host);
+    print(" ");
+    let t = K.tags;
+    print(&t[0]);
+    print(" ");
+    show(K.tags[0].len() as i64);
+    print(" / ");
+    for i in 0..2 {
+        let c = K;
+        if i == 0 { print(&c.host); print(" "); show(c.port as i64); }
+    }
+    print(" / ");
+    show(NAMES[1].len() as i64);
+    print(" ");
+    show(NAMES[0].len() as i64);
+    print("\n");
+    0
+}

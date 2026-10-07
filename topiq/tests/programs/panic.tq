@@ -1,0 +1,12 @@
+// expect: abort RA10 at 7
+// stdout: checking 4
+#unit classical
+
+fn check(n: i32) -> i32 {
+    print("checking 4\n");
+    if n > 3 { panic("n is too large") } else { n }
+}
+
+fn main() -> i32 {
+    check(4)
+}

@@ -1,0 +1,19 @@
+// A hybrid Deutsch program: the quantum half.
+#unit quantum
+import gates;
+
+enum Guess { Constant, Balanced }
+
+[entry]
+[cover: fin{ |0>, |1> }]
+[expect: kernel.outcomes = Guess]
+fn deutsch(oracle: fn(*qubit, *qubit)) -> Guess {
+    let q: [qubit; 1] = prep |0>;
+    aux let a: qubit;
+    x(&a); h(&a);
+    h(&q[0]);
+    oracle(&q[0], &a);
+    h(&q[0]);
+    let bits = measure q;
+    if bits[0] { Guess::Balanced } else { Guess::Constant }
+}

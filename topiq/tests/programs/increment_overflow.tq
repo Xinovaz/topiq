@@ -1,0 +1,11 @@
+// expect: abort RA01 at 6
+// An increment past the type's maximum aborts as any sum does.
+#unit classical
+
+fn next(x: u8) -> u8 {
+    ++x
+}
+
+fn main() -> i32 {
+    next(255) as i32
+}

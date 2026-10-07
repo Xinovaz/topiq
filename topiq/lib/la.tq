@@ -1,0 +1,82 @@
+//! The `la` library: linear algebra over vectors and matrices.
+//!
+//! The types `vec<T, N>`, `mat<T, R, C>` and `square<T, N>` are `core`'s, so
+//! every unit has them; their operators and methods are there too. This unit
+//! gives the functions that make matrices and combine them.
+
+#unit classical
+
+/// The Kronecker product of `a` and `b`.
+fn kron<T, R: const usize, C: const usize, P: const usize, Q: const usize>(a: *const mat<T, R, C>, b: *const mat<T, P, Q>) -> mat<T, R * P, C * Q> {
+    *a ** *b
+}
+
+/// The N by N identity matrix of `T`s.
+fn identity<T, N: const usize>() -> mat<T, N, N> {
+    let zero: T = 0 as T;
+    let out: mat<T, N, N> = mat { e: [[zero; N]; N] };
+    for i in 0..N {
+        out.e[i][i] = 1 as T;
+    }
+    out
+}
+
+/// The R by C matrix of `T`s whose elements are all zero.
+fn zeros<T, R: const usize, C: const usize>() -> mat<T, R, C> {
+    let zero: T = 0 as T;
+    mat { e: [[zero; C]; R] }
+}
+
+/// A basis of the strings `s` of `n` bits whose parity with every row is
+/// even: each `row & s` has an even number of ones. The rows and the strings
+/// are `u64`s whose `n` low bits are the string, its first bit the most
+/// significant, as a measured register reads. Simon's algorithm gives such
+/// rows, and its secret is the one string this gives when they are enough.
+fn gf2_kernel(rows: *const [u64], n: u32) -> [u64] {
+    let mask: u64 = if n >= 64 { !0u64 } else { (1u64 << n) - 1 };
+    // each row kept with its leading one, which no other kept row has
+    let reduced: [u64] = [];
+    let pivots: [u32] = [];
+    for r in rows {
+        let v = *r & mask;
+        for k in 0..reduced.len() {
+            if (v >> pivots[k]) & 1 == 1 { v ^= reduced[k]; }
+        }
+        if v != 0 {
+            let p: u32 = 63;
+            while (v >> p) & 1 == 0 { p--; }
+            for k in 0..reduced.len() {
+                if (reduced[k] >> p) & 1 == 1 { reduced[k] ^= v; }
+            }
+            reduced.push(v);
+            pivots.push(p);
+        }
+    }
+    // one string for each bit no row leads with: that bit, and each leading
+    // bit whose row has it, which makes every parity even
+    let out: [u64] = [];
+    for f in 0..n {
+        let leads = false;
+        for p in &pivots {
+            if *p == f { leads = true; }
+        }
+        if !leads {
+            let s = 1u64 << f;
+            for k in 0..reduced.len() {
+                if (reduced[k] >> f) & 1 == 1 { s |= 1u64 << pivots[k]; }
+            }
+            out.push(s);
+        }
+    }
+    out
+}
+
+/// The Bargmann invariant of three states: the argument of the product
+/// <a|b><b|c><c|a> of their inner products, decided exactly, as `@bargmann`
+/// decides it during translation. It is `None` when that product is not a
+/// positive real times a root of unity of order N, whose argument is then no
+/// `phase<N>`, and when it is zero, which has none.
+fn bargmann<N: const usize, D: const usize>(a: *const vec<cyclo<N>, D>, b: *const vec<cyclo<N>, D>, c: *const vec<cyclo<N>, D>) -> phase<N>? {
+    let p = (adjoint(a) * *b) * (adjoint(b) * *c) * (adjoint(c) * *a);
+    p.arg()
+}

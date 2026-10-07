@@ -1,0 +1,18 @@
+// The middle layer: builds on `vectors`, and hands its type on.
+#unit classical
+import vectors;
+
+struct Segment { from: vectors::Vec2, to: vectors::Vec2 }
+
+fn length_sq(s: *Segment) -> i32 {
+    let dx = s.to.x - s.from.x;
+    let dy = s.to.y - s.from.y;
+    dx * dx + dy * dy
+}
+
+fn unit_x() -> vectors::Vec2 { vectors::make(1, 0) }
+
+fn check(i: usize) -> i32 {
+    let table = [1, 2, 3];
+    table[i]
+}

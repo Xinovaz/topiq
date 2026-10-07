@@ -1,0 +1,12 @@
+// expect: exit 50
+#unit classical
+fn double(x: i64) -> i64 { x * 2 }
+fn main() -> i32 {
+    let o: i64? = Some(20);
+    let k = 1;
+    let a = o.map(&double).unwrap_or(0);
+    let add = fn(x: i64) -> i64 with (k) { x + k };
+    let b = Some(5).map(&add).unwrap_or(0);
+    let c = Some(4).and_then(&fn(x: i64) -> i64? with () { if x > 3 { Some(x) } else { None } }).unwrap_or(0);
+    (a + b + c) as i32
+}

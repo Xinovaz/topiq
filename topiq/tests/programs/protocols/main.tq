@@ -1,0 +1,36 @@
+// expect: exit 0
+// stdout: teleport 1 0 1 0
+// stdout: superdense 00 01 10 11
+// stdout: swap 0 0 0
+// Teleportation, superdense coding of each pair of bits, and the swap test
+// of two equal states.
+#unit classical
+import circs;
+import qpu;
+
+fn bit(b: bool) { if b { print("1"); } else { print("0"); } }
+
+fn main() -> i32 {
+    let dev = qpu::connect("sim://exact").unwrap();
+    print("teleport");
+    for _ in 0..2 {
+        print(" ");
+        bit(dev.run(circs::teleport_one, 0).unwrap());
+        print(" ");
+        bit(dev.run(circs::teleport_turned, 0).unwrap());
+    }
+    print("\nsuperdense");
+    for k in 0..4 {
+        let (b0, b1) = dev.run(circs::superdense, k >= 2, k % 2 == 1).unwrap();
+        print(" ");
+        bit(b0);
+        bit(b1);
+    }
+    print("\nswap");
+    for _ in 0..3 {
+        print(" ");
+        bit(dev.run(circs::same, 0).unwrap());
+    }
+    print("\n");
+    0
+}

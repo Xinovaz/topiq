@@ -1,0 +1,55 @@
+// expect: exit 0
+// stdout: localhost 8080 none 15 -3 / example.org 443 cert.pem / localhost / { host: "localhost", port: 8080, tls: null, retries: [1, 2, 4, 8], offset: -3 }
+// Data-driven configuration: a document embedded as a constant, copied
+// into a unit object at startup, and documents read while running.
+#unit classical(setup)
+
+struct ServerConfig { host: [char], port: u16, tls: TlsConfig?, retries: [u32], offset: i8 }
+struct TlsConfig    { cert: [char], key: [char] }
+
+let DEFAULTS: const ServerConfig = @embed("defaults.tcon");
+let ACTIVE: ServerConfig;
+
+fn setup() { ACTIVE = clone(&DEFAULTS); }
+
+fn load(src: *[char]) -> ServerConfig {
+    match tcon::parse::<ServerConfig>(src) {
+        Ok(c) => c,
+        Err(_) => clone(&DEFAULTS),
+    }
+}
+
+fn show(n: i64) {
+    if n < 0 { print("-"); show(0 - n); return; }
+    if n >= 10 { show(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+fn main() -> i32 {
+    print(&ACTIVE.host);
+    print(" ");
+    show(ACTIVE.port as i64);
+    print(match ACTIVE.tls { Some(_) => " some ", None => " none " });
+    let total: i64 = 0;
+    for r in &ACTIVE.retries { total = total + ((*r) as i64); }
+    show(total);
+    print(" ");
+    show(ACTIVE.offset as i64);
+    print(" / ");
+
+    let given = load("{ host: \"example.org\", port: 443, tls: { cert: \"cert.pem\", key: \"k\" }, retries: [], offset: 0 }");
+    print(&given.host);
+    print(" ");
+    show(given.port as i64);
+    print(" ");
+    match given.tls { Some(t) => print(&t.cert), None => print("none") }
+    print(" / ");
+
+    let broken = load("{ host: 7 }");
+    print(&broken.host);
+    print(" / ");
+    print(&tcon::emit(&DEFAULTS));
+    print("\n");
+    0
+}

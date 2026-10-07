@@ -1,0 +1,35 @@
+// expect: exit 0
+// stdout: flip rigid
+// stdout: eighth refused: the Bell state
+// A judgement read from a circuit's document, checked while the program
+// runs: a refusal comes with the state that shows it, here the entangled
+// state whose two branches `t` framed with the identity turns apart.
+#unit classical
+import circs;
+import circuit;
+import judge;
+import quon;
+
+fn main() -> i32 {
+    match judge::check(circuit::judgment(&circs::flip), judge::ContractClass::Rigid) {
+        Ok(()) => print("flip rigid\n"),
+        Err(_) => print("flip refused\n"),
+    }
+    match judge::check(circuit::judgment(&circs::eighth), judge::ContractClass::Rigid) {
+        Ok(()) => print("eighth rigid\n"),
+        Err(r) => match r.witness {
+            Some(w) => {
+                let bell = quon::parse("isq2 * |00> + isq2 * |11>").unwrap();
+                if w == bell {
+                    print("eighth refused: the Bell state\n");
+                } else {
+                    print("eighth refused: ");
+                    print(&quon::emit(&w));
+                    print("\n");
+                }
+            }
+            None => print("eighth refused with no witness\n"),
+        },
+    }
+    0
+}

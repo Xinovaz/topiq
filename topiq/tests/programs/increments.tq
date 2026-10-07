@@ -1,0 +1,33 @@
+// expect: exit 43
+// `++` and `--` before and after a place, each evaluating the place once.
+#unit classical
+
+struct Counter { hits: u32 }
+
+fn bump(c: *Counter) -> u32 {
+    c.hits++
+}
+
+fn main() -> i32 {
+    let x: i32 = 5;
+    let a = x++;      // 5, and x is 6
+    let b = ++x;      // 7
+    let c = x--;      // 7, and x is 6
+    let d = --x;      // 5
+    let neg = -(-x);  // a double negation, written apart
+
+    // the index is read once, so `i` moves once
+    let arr = [1, 2, 3];
+    let i: usize = 0;
+    arr[i++] += 10;
+    ++arr[i];
+
+    let n = 0;
+    for k in 0..4 { n++; }
+
+    let counter = Counter { hits: 0 };
+    bump(&counter);
+    let seen = bump(&counter);  // 1, and hits is 2
+
+    a + b + c + d + arr[0] + arr[1] + (i as i32) + n + neg - 5 + (seen as i32) + (counter.hits as i32) - 3
+}

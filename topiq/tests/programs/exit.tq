@@ -1,0 +1,14 @@
+// expect: exit 7
+// stdout: before
+#unit classical
+
+fn stop(code: i32) -> i32 {
+    print("before\n");
+    exit(code)
+}
+
+fn main() -> i32 {
+    stop(7);
+    print("after\n");
+    0
+}

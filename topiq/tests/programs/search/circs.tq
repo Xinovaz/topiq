@@ -1,0 +1,51 @@
+// Grover's search and amplitude amplification from the `algo` library, and
+// the Grover iterate built from them typed over its orbit.
+#unit quantum
+import gates;
+import algo;
+import judge;
+
+// The phase oracle marking |11>.
+fn mark11(r: *[qubit; 2]) { cz(&r[0], &r[1]); }
+
+// The uniform superposition, as a preparation `amplify` can undo.
+fn spread(r: *[qubit; 2]) { hadamard_all(r); }
+
+// One marked string among four: one round finds it with certainty.
+[entry]
+fn search(n: u32) -> [bool; 2] { algo::grover(mark11, algo::grover_rounds(2, 1)) }
+
+[entry]
+fn amplified(n: u32) -> [bool; 2] {
+    let r: [qubit; 2];
+    algo::amplify(spread, mark11, &r, 1);
+    measure r
+}
+
+// The rounds for one marked string among 4, 16, 64 and 1024.
+[entry]
+fn rounds(n: u32) -> (u32, u32, u32, u32) {
+    (algo::grover_rounds(2, 1), algo::grover_rounds(4, 1), algo::grover_rounds(6, 1), algo::grover_rounds(10, 1))
+}
+
+// The three points of the iterate's orbit: the uniform superposition, the
+// marked point, and the iterate of that.
+cover Orb  = fin{ (|00> + |01> + |10> + |11>) / 2,
+                  |11>,
+                  (-|00> - |01> - |10> + |11>) / 2 };
+gauge GOrb = fid((|00> + |01> + |10> + |11>) / 2);
+
+[cover: Orb] [gauge: GOrb]
+[expect: contract = cyc]
+fn iterate(r: *[qubit; 2]) { algo::grover_iterate(mark11, r); }
+
+@static_assert(
+    match @judgment(iterate).contract {
+        judge::ContractClass::Cyc(s) => s.len() == 3 && s[0] == phase::<48>::of(0)
+            && s[1] == phase::<48>::of(24) && s[2] == phase::<48>::of(0),
+        _ => false,
+    },
+    "the schedule is (0, pi, 0)"
+);
+@static_assert(@certificate(iterate).map[0] == 1 && @certificate(iterate).map[1] == 2
+    && @certificate(iterate).map[2] == 0, "the base map cycles the orbit");

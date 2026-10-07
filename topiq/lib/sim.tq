@@ -1,0 +1,1097 @@
+//! The `sim` library: the simulators circuits run on.
+//!
+//! A simulator is a `qpu::Backend`, registered with `qpu` under the
+//! description that names it, as any device is. This unit provides one,
+//! `exact()`, which `qpu` registers as `sim://exact` before it connects
+//! anything.
+//!
+//! `sim://exact` computes the state exactly. An amplitude is an element of
+//! Z[ζ], ζ = e^(2πi/48), whose group of phases holds those of every
+//! conforming conductor: 8, 16 and 24. No square root is ever taken: a gate
+//! is applied without its normalising factor, and a measurement's
+//! probabilities are ratios of the squared magnitudes, so the state is exact
+//! however long the circuit runs. The simulator allocates qubits as a
+//! circuit asks for them, gives a measured or forgotten qubit back in |0>,
+//! and keeps the registers whose length is known only as a circuit runs,
+//! naming their qubits by index as the circuit does.
+//!
+//! An outcome of probability exactly zero is never chosen; the others are
+//! drawn from a generator. Each device connected has a generator of its own,
+//! started from the seed its description gives:
+//!
+//! - `sim://exact`: the fixed seed `SEED`, the same on every connection and
+//!   every run of a program, so that a program's runs repeat;
+//! - `sim://exact?seed=clock`: `qpu::clock_seed()`, so that each run of a
+//!   program draws differently;
+//! - `sim://exact?seed=N`, for `N` a whole number that fits a `u64`: `N`, or
+//!   the fixed seed when `N` is zero, as `Device::reseed` takes it.
+//!
+//! Any other seed, or any other parameter, is `qpu::Error::BadArgument`, so
+//! that a misspelt description is refused rather than read as another.
+//!
+//! The device runs everything `qpu` asks of one: runs, distributions, which
+//! follow every way a circuit's measurements can go, and phase estimates.
+//! `qpu` also uses this simulator to check, before any device runs a
+//! circuit, that an operator supplied for an operator-typed parameter keeps
+//! what the circuit needs kept (`__keeps_state`).
+#unit classical
+import qpu;
+import quon;
+
+/// The seed every device's generator starts from when its description gives
+/// none.
+let SEED: const u64 = 6148914691236517205;
+
+/// The exact simulator.
+fn exact() -> qpu::Backend {
+    qpu::Backend {
+        open: open_exact,
+        run: run_exact,
+        distribution: Some(distribution_exact),
+        reseed: Some(reseed_exact),
+        estimate: Some(estimate_exact),
+    }
+}
+
+/// A device of the exact simulator: its generator's state.
+struct Exact { rng: u64 }
+
+/// The exact simulator's devices.
+let EXACT: [Exact] = [];
+
+static fn bad(why: *const [char]) -> qpu::Error {
+    qpu::Error::BadArgument(clone(why))
+}
+
+static fn malformed(why: *const [char]) -> qpu::Error {
+    qpu::Error::Malformed(clone(why))
+}
+
+/////////////
+// DEVICES //
+/////////////
+
+/// A device of the exact simulator, its generator started from the seed `d`
+/// gives.
+static fn open_exact(d: *const qpu::Desc) -> Result<usize, qpu::Error> {
+    let rng = SEED;
+    for p in &d.params {
+        if str::eq(&p.0, "seed") {
+            rng = seed_of(&p.1)?;
+        } else {
+            return Err(qpu::Error::BadArgument("sim://exact takes no parameter \"" + p.0 + "\"; it takes only seed"));
+        }
+    }
+    EXACT.push(Exact { rng: rng });
+    Ok(EXACT.len() - 1)
+}
+
+/// The seed a description's `seed` parameter gives.
+static fn seed_of(text: *const [char]) -> Result<u64, qpu::Error> {
+    if str::eq(text, "clock") {
+        return Ok(qpu::clock_seed());
+    }
+    let refused = qpu::Error::BadArgument(string::from("seed takes clock or a whole number that fits a u64, not \"") + text + "\"");
+    if text.len() == 0 {
+        return Err(refused);
+    }
+    // decimal digits alone, so that no sign, base or exponent is read
+    let x: u64 = 0;
+    for ch in text {
+        let c = *ch;
+        if c < '0' || c > '9' {
+            return Err(refused);
+        }
+        let (tens, over) = overflowing_mul(x, 10);
+        let (sum, carry) = overflowing_add(tens, ((c as u32) - ('0' as u32)) as u64);
+        if over || carry {
+            return Err(refused);
+        }
+        x = sum;
+    }
+    Ok(if x == 0 { SEED } else { x })
+}
+
+/// Starts the device's generator again from `seed`, the fixed seed when it
+/// is zero.
+static fn reseed_exact(h: usize, seed: u64) {
+    EXACT[h].rng = if seed == 0 { SEED } else { seed };
+}
+
+/// Runs the job `job.shots` times. A seed in the job starts a generator for
+/// these runs alone; without one they draw from the device's own, which
+/// goes on from where they leave it.
+static fn run_exact(h: usize, job: *const qpu::Job) -> Result<qpu::Tally, qpu::Error> {
+    let rng = match &job.seed {
+        Some(x) => { if x == 0 { SEED } else { x } }
+        None => EXACT[h].rng,
+    };
+    let t = qpu::Tally { outcomes: [], counts: [] };
+    for _ in 0..job.shots {
+        let v = once(&job.circuit, &job.params, &job.subs, &job.states, &rng)?;
+        t.add(v, 1);
+    }
+    if job.seed.is_none() {
+        EXACT[h].rng = rng;
+    }
+    Ok(t)
+}
+
+/// The most runs one distribution follows: a circuit whose measurements
+/// could go either way more often than this, in some branch, has more
+/// outcomes than are worth listing, or, repeating until a measurement
+/// succeeds, infinitely many.
+let MAX_BRANCHES: const u32 = 4096;
+
+/// Every outcome of the job's circuit, in the order first reached, with its
+/// probability, exactly: one run for each way its measurements can go, each
+/// measurement that could go either way taken first as `false`. Nothing is
+/// drawn, so the device's generator is left as it was.
+static fn distribution_exact(h: usize, job: *const qpu::Job) -> Result<qpu::Spread, qpu::Error> {
+    let out = qpu::Spread { outcomes: [], probabilities: [] };
+    let script: [bool] = [];
+    let runs: u32 = 0;
+    loop {
+        runs++;
+        if runs > MAX_BRANCHES {
+            return Err(qpu::Error::Unsupported);
+        }
+        let s = empty_sim(SEED);
+        s.exact = true;
+        s.forced = clone(&script);
+        let v = run_on(&s, &job.circuit, &job.params, &job.subs, &job.states)?;
+        out.add(v, s.prob);
+        // the next way: the last measurement taken as `false` taken as
+        // `true`, and those after it left to go `false` again
+        script = clone(&s.forced);
+        script.truncate(s.taken);
+        while script.len() > 0 && script[script.len() - 1] {
+            script.pop();
+        }
+        if script.len() == 0 {
+            break;
+        }
+        let last = script.len() - 1;
+        script[last] = true;
+    }
+    Ok(out)
+}
+
+/// The phase `c` gives the basis state `sector` of the qubits it takes, as
+/// `Device::estimate_stat` estimates it: a ladder of `bits` control qubits,
+/// the j-th controlling `c` repeated 2^j times, read by the semiclassical
+/// inverse Fourier transform. `qpu` has checked that `c` is monic, takes no
+/// classical value or operator, branches on nothing, and that `sector` is
+/// one of its basis states.
+static fn estimate_exact(h: usize, c: *const qpu::Circuit, sector: u32, bits: u8) -> Result<phase<48>, qpu::Error> {
+    let width: u32 = 0;
+    for r in &c.registers {
+        width += *r;
+    }
+    if width > 20 {
+        return Err(qpu::Error::Unsupported);
+    }
+    let t = bits as usize;
+    let s = empty_sim(EXACT[h].rng);
+    // the register, in the basis state `sector`
+    let register: [usize] = [];
+    for j in 0..(width as usize) {
+        let q = fresh(&s);
+        register.push(q);
+        if ((sector >> (width - 1 - j as u32)) & 1) == 1 {
+            one_qubit(&s, q, &[], 0, 0);
+        }
+    }
+    // the ladder, each rung in |+>
+    let ladder: [usize] = [];
+    for _ in 0..t {
+        let q = fresh(&s);
+        one_qubit(&s, q, &[], 2, 0);
+        ladder.push(q);
+    }
+    for j in 0..t {
+        let ctl: [Ctl] = [Ctl { q: ladder[j], on: true }];
+        for _ in 0..((1 as usize) << j) {
+            let f = qpu::Frame::for_circuit(c, [], []);
+            for i in 0..c.inputs.len() {
+                f.wires[c.inputs[i] as usize] = register[i];
+                f.given[c.inputs[i] as usize] = true;
+            }
+            exec(&s, &f, &c.body, &ctl)?;
+        }
+    }
+    // the inverse Fourier transform, one rung at a time from the last: the
+    // j-th rung holds 2^j times the phase, whose digits after the first
+    // are those read already
+    let digits: [bool] = [];
+    for _ in 0..t {
+        digits.push(false);
+    }
+    let j = t;
+    while j > 0 {
+        j--;
+        let back: usize = 0;
+        for l in (j + 1)..t {
+            if digits[l] {
+                back += 48 / ((1 as usize) << (l - j + 1));
+            }
+        }
+        one_qubit(&s, ladder[j], &[], 3, (48 - back % 48) % 48);
+        one_qubit(&s, ladder[j], &[], 2, 0);
+        digits[j] = observe(&s, ladder[j]);
+    }
+    EXACT[h].rng = s.rng;
+    // the phase is 0.d0 d1 … of a turn, d0 read from the first rung
+    let index: i64 = 0;
+    for l in 0..t {
+        if digits[l] {
+            index += (48 / ((1 as usize) << (l + 1))) as i64;
+        }
+    }
+    Ok(phase::<48>::of(index))
+}
+
+///////////////////
+//
+// Amplitudes:
+//   An amplitude is an element of Z[ζ], ζ = e^(2πi/48), held as its sixteen
+//   coefficients on 1, ζ, …, ζ^15: it is reduced by the cyclotomic polynomial
+//   Φ48 = x^16 - x^8 + 1, so each element has one form and zero is all zeros.
+//
+///////////////////
+
+let W: const usize = 16;
+
+/// The amplitude times ζ^m.
+static fn times_zeta(a: [i64; 16], m: usize) -> [i64; 16] {
+    for _ in 0..(m % 48) {
+        let top = a[15];
+        for k in 0..15 {
+            a[15 - k] = a[14 - k];
+        }
+        a[0] = -top;
+        a[8] += top;
+    }
+    a
+}
+
+static fn plus(a: [i64; 16], b: [i64; 16]) -> [i64; 16] {
+    for k in 0..16 {
+        a[k] += b[k];
+    }
+    a
+}
+
+static fn minus(a: [i64; 16], b: [i64; 16]) -> [i64; 16] {
+    for k in 0..16 {
+        a[k] -= b[k];
+    }
+    a
+}
+
+static fn times(a: [i64; 16], b: [i64; 16]) -> [i64; 16] {
+    let r: [i64; 31] = [0; 31];
+    for i in 0..16 {
+        if a[i] != 0 {
+            for j in 0..16 {
+                r[i + j] += a[i] * b[j];
+            }
+        }
+    }
+    // x^d = x^(d-16) x^16 = x^(d-8) - x^(d-16)
+    for k in 0..15 {
+        let d = 30 - k;
+        let c = r[d];
+        r[d - 8] += c;
+        r[d - 16] -= c;
+    }
+    let out: [i64; 16] = [0; 16];
+    for k in 0..16 {
+        out[k] = r[k];
+    }
+    out
+}
+
+/// The amplitude times √2 = ζ^6 + ζ^42.
+static fn times_root2(a: [i64; 16]) -> [i64; 16] {
+    plus(times_zeta(a, 6), times_zeta(a, 42))
+}
+
+static fn is_zero(a: [i64; 16]) -> bool {
+    for k in 0..16 {
+        if a[k] != 0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// The squared magnitude of an amplitude, approximately: for drawing an
+/// outcome, never for deciding one is impossible.
+static fn weight(a: [i64; 16]) -> f64 {
+    let re = 0.0;
+    let im = 0.0;
+    for k in 0..16 {
+        if a[k] != 0 {
+            let t = 2.0 * 3.141592653589793 * (k as f64) / 48.0;
+            re += (a[k] as f64) * __cos(t);
+            im += (a[k] as f64) * __sin(t);
+        }
+    }
+    re * re + im * im
+}
+
+/// The number `p/q` or `p` written in `s`.
+static fn fraction(s: *const [char]) -> Result<(i64, i64), qpu::Error> {
+    let slash = s.len();
+    for i in 0..s.len() {
+        if s[i] == '/' {
+            slash = i;
+        }
+    }
+    let p: [char] = [];
+    let q: [char] = [];
+    for i in 0..s.len() {
+        if i < slash { p.push(s[i]); } else if i > slash { q.push(s[i]); }
+    }
+    let num = match str::parse::<i64>(&p) { Some(n) => n, None => { return Err(qpu::Error::Unsupported); } };
+    let den = if slash == s.len() {
+        1
+    } else {
+        match str::parse::<i64>(&q) { Some(n) => n, None => { return Err(qpu::Error::Unsupported); } }
+    };
+    if den <= 0 {
+        return Err(malformed("a fraction without a positive denominator"));
+    }
+    Ok((num, den))
+}
+
+static fn gcd(a: i64, b: i64) -> i64 {
+    let x = if a < 0 { -a } else { a };
+    let y = if b < 0 { -b } else { b };
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    x
+}
+
+/// Exact numbers, each the fractions on the powers of ζ_N written as text,
+/// as amplitudes in Z[ζ], scaled by one factor that clears every
+/// denominator: the factor, and the amplitudes.
+static fn exact_all(xs: *const [[string]], scale: usize) -> Result<(i64, [[i64; 16]]), qpu::Error> {
+    let d: i64 = 1;
+    for x in xs {
+        for c in x {
+            let (p, q) = fraction(c)?;
+            d = d / gcd(d, q) * q;
+        }
+    }
+    let out: [[i64; 16]] = [];
+    for x in xs {
+        let a: [i64; 16] = [0; 16];
+        for k in 0..x.len() {
+            let (p, q) = fraction(&x[k])?;
+            let one: [i64; 16] = [0; 16];
+            one[0] = p * (d / q);
+            a = plus(a, times_zeta(one, k * scale));
+        }
+        out.push(a);
+    }
+    Ok((d, out))
+}
+
+///////////////
+// THE STATE //
+///////////////
+
+/// The state of `n` qubits: amplitude `b` is at `amps[16 b ..]`, qubit `q`
+/// being bit `q` of `b`. `free` holds qubits given back, each in |0>.
+///
+/// A run that follows every outcome, `exact`, draws nothing: the measurements
+/// that could go either way take, in order, the outcomes the script `forced`
+/// gives, and `false` past its end, which lengthens it; `taken` counts them.
+/// `prob` is the probability of the outcomes taken so far, exactly.
+struct Sim { n: usize, amps: [i64], free: [usize], rng: u64, exact: bool, forced: [bool], taken: usize, prob: cyclo<48> }
+
+/// A qubit an operation is controlled on.
+struct Ctl { q: usize, on: bool }
+
+/// A simulator of no qubits: its one basis state, with amplitude 1.
+static fn empty_sim(rng: u64) -> Sim {
+    Sim {
+        n: 0,
+        amps: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        free: [],
+        rng: rng,
+        exact: false,
+        forced: [],
+        taken: 0,
+        prob: cyclo::<48>::from(1),
+    }
+}
+
+static fn amp(s: *const Sim, b: usize) -> [i64; 16] {
+    let a: [i64; 16] = [0; 16];
+    for k in 0..16 {
+        a[k] = s.amps[b * 16 + k];
+    }
+    a
+}
+
+static fn put(s: *Sim, b: usize, a: [i64; 16]) {
+    for k in 0..16 {
+        s.amps[b * 16 + k] = a[k];
+    }
+}
+
+static fn size(s: *const Sim) -> usize {
+    (1 as usize) << s.n
+}
+
+static fn bit(b: usize, q: usize) -> bool {
+    ((b >> q) & 1) == 1
+}
+
+static fn holds(b: usize, ctl: *const [Ctl]) -> bool {
+    for c in ctl {
+        if bit(b, c.q) != c.on {
+            return false;
+        }
+    }
+    true
+}
+
+/// A qubit in |0>: one given back, or a new one.
+static fn fresh(s: *Sim) -> usize {
+    match s.free.pop() {
+        Some(q) => q,
+        None => {
+            let len = s.amps.len();
+            for _ in 0..len {
+                s.amps.push(0);
+            }
+            s.n++
+        }
+    }
+}
+
+/// Divides every coefficient by what they have in common, which leaves every
+/// probability as it was.
+static fn tidy(s: *Sim) {
+    let g: i64 = 0;
+    for x in &s.amps {
+        g = gcd(g, *x);
+        if g == 1 {
+            return;
+        }
+    }
+    if g > 1 {
+        for i in 0..s.amps.len() {
+            s.amps[i] /= g;
+        }
+    }
+}
+
+/// Multiplies each amplitude where the controls do not hold by `a`, which
+/// the gate multiplied the others by on top of their true values.
+static fn compensate(s: *Sim, ctl: *const [Ctl], root2: bool, factor: i64) {
+    if ctl.len() == 0 {
+        return;
+    }
+    for b in 0..size(s) {
+        if !holds(b, ctl) {
+            let x = amp(s, b);
+            if root2 {
+                put(s, b, times_root2(x));
+            } else {
+                let one: [i64; 16] = [0; 16];
+                one[0] = factor;
+                put(s, b, times(x, one));
+            }
+        }
+    }
+}
+
+/// Applies a one-qubit phase or flip: `f` is 0 for X, 1 for Y, 2 for H;
+/// otherwise the qubit's |1> amplitudes are multiplied by ζ^m.
+static fn one_qubit(s: *Sim, t: usize, ctl: *const [Ctl], kind: u32, m: usize) {
+    for b in 0..size(s) {
+        if bit(b, t) || !holds(b, ctl) {
+            continue;
+        }
+        let b1 = b | ((1 as usize) << t);
+        let a0 = amp(s, b);
+        let a1 = amp(s, b1);
+        if kind == 0 {
+            put(s, b, a1);
+            put(s, b1, a0);
+        } else if kind == 1 {
+            put(s, b, times_zeta(a1, 36));
+            put(s, b1, times_zeta(a0, 12));
+        } else if kind == 2 {
+            put(s, b, plus(a0, a1));
+            put(s, b1, minus(a0, a1));
+        } else {
+            put(s, b1, times_zeta(a1, m));
+        }
+    }
+    if kind == 2 {
+        compensate(s, ctl, true, 1);
+        tidy(s);
+    }
+}
+
+/// Multiplies every amplitude where the controls hold by ζ^m.
+static fn global(s: *Sim, ctl: *const [Ctl], m: usize) {
+    for b in 0..size(s) {
+        if holds(b, ctl) {
+            put(s, b, times_zeta(amp(s, b), m));
+        }
+    }
+}
+
+static fn swap(s: *Sim, t1: usize, t2: usize, ctl: *const [Ctl]) {
+    for b in 0..size(s) {
+        if bit(b, t1) && !bit(b, t2) && holds(b, ctl) {
+            let o = b ^ ((1 as usize) << t1) ^ ((1 as usize) << t2);
+            let a = amp(s, b);
+            put(s, b, amp(s, o));
+            put(s, o, a);
+        }
+    }
+}
+
+/// Applies an exact matrix, scaled by `d` to have entries in Z[ζ], to the
+/// qubits `ts`, the first the most significant of its index.
+static fn matrix(s: *Sim, ts: *const [usize], ctl: *const [Ctl], m: *const [[i64; 16]], d: i64) {
+    let k = ts.len();
+    let dim = (1 as usize) << k;
+    for b in 0..size(s) {
+        let lowest = true;
+        for t in ts {
+            if bit(b, *t) {
+                lowest = false;
+            }
+        }
+        if !lowest || !holds(b, ctl) {
+            continue;
+        }
+        let idx: [usize] = [];
+        let v: [[i64; 16]] = [];
+        for j in 0..dim {
+            let at = b;
+            for p in 0..k {
+                if bit(j, k - 1 - p) {
+                    at |= ((1 as usize) << ts[p]);
+                }
+            }
+            idx.push(at);
+            v.push(amp(s, at));
+        }
+        for i in 0..dim {
+            let acc: [i64; 16] = [0; 16];
+            for j in 0..dim {
+                acc = plus(acc, times(m[i * dim + j], v[j]));
+            }
+            put(s, idx[i], acc);
+        }
+    }
+    compensate(s, ctl, false, d);
+    tidy(s);
+}
+
+/// Measures the qubit `q`, then returns it to |0>: whether it was |1>.
+static fn observe(s: *Sim, q: usize) -> bool {
+    let w0 = 0.0;
+    let w1 = 0.0;
+    let zero0 = true;
+    let zero1 = true;
+    for b in 0..size(s) {
+        let a = amp(s, b);
+        if !is_zero(a) {
+            if bit(b, q) {
+                zero1 = false;
+                w1 += weight(a);
+            } else {
+                zero0 = false;
+                w0 += weight(a);
+            }
+        }
+    }
+    let one = if zero0 {
+        true
+    } else if zero1 {
+        false
+    } else if s.exact {
+        branch(s, q)
+    } else {
+        uniform(s) * (w0 + w1) >= w0
+    };
+    let nothing: [i64; 16] = [0; 16];
+    for b in 0..size(s) {
+        if bit(b, q) != one {
+            put(s, b, nothing);
+        }
+    }
+    if one {
+        one_qubit(s, q, &[], 0, 0);
+    }
+    tidy(s);
+    one
+}
+
+/// In a run that follows every outcome, the outcome of measuring `q`, which
+/// could go either way: the script's, or `false` past its end. The run's
+/// probability is multiplied by that outcome's, its share of the squared
+/// magnitudes, exactly.
+static fn branch(s: *Sim, q: usize) -> bool {
+    let w0 = cyclo::<48>::from(0);
+    let w1 = cyclo::<48>::from(0);
+    for b in 0..size(s) {
+        let a = amp(s, b);
+        if !is_zero(a) {
+            if bit(b, q) {
+                w1 += exact_weight(a);
+            } else {
+                w0 += exact_weight(a);
+            }
+        }
+    }
+    if s.taken == s.forced.len() {
+        s.forced.push(false);
+    }
+    let one = s.forced[s.taken];
+    s.taken++;
+    let share = if one { w1 } else { w0 };
+    s.prob = s.prob * share / (w0 + w1);
+    one
+}
+
+/// The squared magnitude of an amplitude.
+static fn exact_weight(a: [i64; 16]) -> cyclo<48> {
+    let z = cyclo::<48>::from(0);
+    for k in 0..16 {
+        if a[k] != 0 {
+            z += cyclo::<48>::zeta(k as i64) * cyclo::<48>::from(a[k]);
+        }
+    }
+    z * adjoint(z)
+}
+
+/// The next number the generator gives.
+static fn uniform(s: *Sim) -> f64 {
+    let x = s.rng;
+    x ^= x >> 12;
+    x ^= wrapping_mul(x, 33554432);
+    x ^= x >> 27;
+    s.rng = x;
+    let r = wrapping_mul(x, 2685821657736338717);
+    ((r >> 11) as f64) / 9007199254740992.0
+}
+
+///////////////////////
+// RUNNING A CIRCUIT //
+///////////////////////
+
+/// The qubits an operation names.
+static fn qubits(ws: *const [u32], f: *const qpu::Frame) -> Result<[usize], qpu::Error> {
+    let out: [usize] = [];
+    for w in ws {
+        let q = f.wires[(*w) as usize];
+        if q == qpu::NONE {
+            return Err(malformed("an operation on a qubit not allocated"));
+        }
+        out.push(q);
+    }
+    Ok(out)
+}
+
+/// The controls of an operation.
+static fn under(ctl: *const [Ctl], cs: *const [qpu::Control], f: *const qpu::Frame) -> Result<[Ctl], qpu::Error> {
+    let out: [Ctl] = [];
+    for c in ctl {
+        out.push(Ctl { q: c.q, on: c.on });
+    }
+    for c in cs {
+        let q = f.wires[c.wire as usize];
+        if q == qpu::NONE {
+            return Err(malformed("a control on a qubit not allocated"));
+        }
+        out.push(Ctl { q: q, on: c.on });
+    }
+    Ok(out)
+}
+
+/// Refuses an operation naming one qubit twice, which two wires naming
+/// elements of a register whose length is known only as it runs can do.
+static fn distinct(ts: *const [usize], cs: *const [Ctl]) -> Result<(), qpu::Error> {
+    let seen: [usize] = [];
+    for t in ts {
+        seen.push(*t);
+    }
+    for c in cs {
+        seen.push(c.q);
+    }
+    for i in 0..seen.len() {
+        for j in (i + 1)..seen.len() {
+            if seen[i] == seen[j] {
+                return Err(bad("an operation naming one qubit twice"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The index of an angle.
+static fn angle(a: *const qpu::Angle, f: *const qpu::Frame) -> Result<usize, qpu::Error> {
+    let m = match a {
+        qpu::Angle::Fixed(m) => m as i64,
+        qpu::Angle::Runtime(e) => qpu::eval(e, f)?.as_int()?,
+    };
+    let n = 48 / (f.scale as i64);
+    let r = ((m % n) + n) % n;
+    Ok((r as usize) * f.scale)
+}
+
+/// Runs the operations `ops` of the circuit `f` runs, under the controls
+/// `ctl`.
+static fn exec(s: *Sim, f: *qpu::Frame, ops: *const [qpu::Op], ctl: *const [Ctl]) -> Result<(), qpu::Error> {
+    for op in ops {
+        match op {
+            qpu::Op::Gate { gate, targets, controls } => {
+                let ts = qubits(targets, f)?;
+                let cs = under(ctl, controls, f)?;
+                distinct(&ts, &cs)?;
+                match gate {
+                    qpu::Gate::X => one_qubit(s, ts[0], &cs, 0, 0),
+                    qpu::Gate::Y => one_qubit(s, ts[0], &cs, 1, 0),
+                    qpu::Gate::Z => one_qubit(s, ts[0], &cs, 3, 24),
+                    qpu::Gate::H => one_qubit(s, ts[0], &cs, 2, 0),
+                    qpu::Gate::S => one_qubit(s, ts[0], &cs, 3, 12),
+                    qpu::Gate::Sdg => one_qubit(s, ts[0], &cs, 3, 36),
+                    qpu::Gate::T => one_qubit(s, ts[0], &cs, 3, 6),
+                    qpu::Gate::Tdg => one_qubit(s, ts[0], &cs, 3, 42),
+                    qpu::Gate::Swap => swap(s, ts[0], ts[1], &cs),
+                    qpu::Gate::Phase(a) => {
+                        let m = angle(a, f)?;
+                        one_qubit(s, ts[0], &cs, 3, m);
+                    }
+                    qpu::Gate::GPhase(a) => {
+                        let m = angle(a, f)?;
+                        global(s, &cs, m);
+                    }
+                }
+            }
+            qpu::Op::Unitary { size, entries, targets, controls } => {
+                let ts = qubits(targets, f)?;
+                let cs = under(ctl, controls, f)?;
+                distinct(&ts, &cs)?;
+                let (d, m) = exact_all(entries, f.scale)?;
+                matrix(s, &ts, &cs, &m, d);
+            }
+            qpu::Op::Measure { wire, bit } => {
+                let q = qubits(&[wire], f)?[0];
+                f.bits[bit as usize] = observe(s, q);
+                s.free.push(q);
+                f.wires[wire as usize] = qpu::NONE;
+            }
+            qpu::Op::Forget { wire } => {
+                let q = qubits(&[wire], f)?[0];
+                observe(s, q);
+                s.free.push(q);
+                f.wires[wire as usize] = qpu::NONE;
+            }
+            qpu::Op::Alloc { wire } => {
+                // a parameter's qubits are the caller's already
+                if f.wires[wire as usize] == qpu::NONE {
+                    f.wires[wire as usize] = fresh(s);
+                }
+            }
+            qpu::Op::Release { wire } => {
+                if f.given[wire as usize] {
+                    continue;
+                }
+                let q = qubits(&[wire], f)?[0];
+                for b in 0..size(s) {
+                    if bit(b, q) && !is_zero(amp(s, b)) {
+                        return Err(malformed("a qubit given back that is not |0>"));
+                    }
+                }
+                s.free.push(q);
+                f.wires[wire as usize] = qpu::NONE;
+            }
+            qpu::Op::If { cond, then, els } => {
+                if qpu::eval(cond, f)?.as_bool()? {
+                    exec(s, f, then, ctl)?;
+                } else {
+                    exec(s, f, els, ctl)?;
+                }
+            }
+            qpu::Op::For { var, start, end, body } => {
+                let a = qpu::eval(start, f)?.as_int()?;
+                let e = qpu::eval(end, f)?.as_int()?;
+                for i in a..e {
+                    f.vars[var as usize] = qpu::Val::Int(i);
+                    exec(s, f, body, ctl)?;
+                }
+            }
+            qpu::Op::Let { var, value } => {
+                f.vars[var as usize] = qpu::eval(value, f)?;
+            }
+            qpu::Op::Lift { var, value } => {
+                f.vars[var as usize] = qpu::eval(value, f)?;
+            }
+            qpu::Op::Call { slot, args, controls, adjoint } => {
+                let sub = clone(&f.slots[slot as usize]);
+                let ops = if adjoint { qpu::__invert(&sub.body, sub.conductor)? } else { clone(&sub.body) };
+                let g = qpu::Frame::for_circuit(&sub, [], []);
+                let k = 0;
+                for a in args {
+                    for w in a {
+                        if k >= sub.inputs.len() {
+                            return Err(malformed("an operator supplied for more qubits than it takes"));
+                        }
+                        g.wires[sub.inputs[k] as usize] = f.wires[(*w) as usize];
+                        g.given[sub.inputs[k] as usize] = true;
+                        k++;
+                    }
+                }
+                let cs = under(ctl, controls, f)?;
+                exec(s, &g, &ops, &cs)?;
+            }
+            qpu::Op::Grow { reg, wire } => {
+                let q = qubits(&[wire], f)?[0];
+                f.regs[reg as usize].push(q);
+                f.wires[wire as usize] = qpu::NONE;
+            }
+            qpu::Op::Element { wire, reg, index } => {
+                let i = qpu::eval(index, f)?.as_int()?;
+                if i < 0 || (i as usize) >= f.regs[reg as usize].len() {
+                    return Err(qpu::Error::Index);
+                }
+                f.wires[wire as usize] = f.regs[reg as usize][i as usize];
+            }
+            qpu::Op::MeasureAll { reg, var } => {
+                let out: [qpu::Val] = [];
+                for q in &f.regs[reg as usize] {
+                    let b = observe(s, *q);
+                    s.free.push(*q);
+                    out.push(qpu::Val::Bool(b));
+                }
+                f.vars[var as usize] = qpu::Val::Agg(out);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The state `st` put on the qubits `from` onwards, which are |0>.
+static fn load(s: *Sim, from: usize, st: *const quon::State) -> Result<(), qpu::Error> {
+    let coeffs: [[string]] = [];
+    for t in &st.terms {
+        let cs: [string] = [];
+        for c in &t.amp.c {
+            cs.push(c.text([]));
+        }
+        coeffs.push(cs);
+    }
+    let (d, amps) = exact_all(&coeffs, 1)?;
+    let old = clone(&s.amps);
+    for i in 0..s.amps.len() {
+        s.amps[i] = 0;
+    }
+    for b in 0..size(s) {
+        let a: [i64; 16] = [0; 16];
+        for k in 0..16 {
+            a[k] = old[b * 16 + k];
+        }
+        if is_zero(a) {
+            continue;
+        }
+        for j in 0..st.terms.len() {
+            let at = b;
+            let ket = &st.terms[j].ket;
+            for p in 0..ket.len() {
+                if ket[p] {
+                    at |= ((1 as usize) << (from + p));
+                }
+            }
+            put(s, at, plus(amp(s, at), times(a, amps[j])));
+        }
+    }
+    tidy(s);
+    Ok(())
+}
+
+/// Runs the circuit `c` once, with the given parameters, supplied circuits
+/// and starting states of its registers, and the generator's state `rng`:
+/// what it gives the caller.
+static fn once(c: *const qpu::Circuit, params: *const [qpu::Val], slots: *const [qpu::Circuit], states: *const [quon::State?], rng: *u64) -> Result<qpu::Val, qpu::Error> {
+    let s = empty_sim(*rng);
+    let v = run_on(&s, c, params, slots, states)?;
+    *rng = s.rng;
+    Ok(v)
+}
+
+/// Runs the circuit `c` once on the simulator `s`, as `once` does.
+static fn run_on(s: *Sim, c: *const qpu::Circuit, params: *const [qpu::Val], slots: *const [qpu::Circuit], states: *const [quon::State?]) -> Result<qpu::Val, qpu::Error> {
+    let f = qpu::Frame::for_circuit(c, clone(params), clone(slots));
+    let at = 0;
+    for i in 0..c.registers.len() {
+        let w = c.registers[i] as usize;
+        let from = s.n;
+        for j in 0..w {
+            let q = fresh(s);
+            f.wires[c.inputs[at + j] as usize] = q;
+            f.given[c.inputs[at + j] as usize] = true;
+        }
+        match &states[i] {
+            Some(st) => { load(s, from, st)?; }
+            None => {}
+        }
+        at += w;
+    }
+    for nd in &c.nodes {
+        if f.wires[nd.wire as usize] == qpu::NONE {
+            f.wires[nd.wire as usize] = fresh(s);
+        }
+    }
+    exec(s, &f, &c.body, &[])?;
+    match &c.result {
+        Some(e) => qpu::eval(e, &f),
+        None => Ok(qpu::Val::Agg([])),
+    }
+}
+
+////////////////////////////
+// WHAT AN OPERATOR KEEPS //
+////////////////////////////
+
+/// The most qubits a supplied operator's arguments may have for what it
+/// keeps to be checked: each basis state of the rest is tried.
+let KEEPS_WIDTH: const usize = 8;
+
+/// The basis state whose bits over the qubits `qs`, the first most
+/// significant, are those of `z`, and every other qubit's 0.
+static fn spread(z: usize, qs: *const [usize]) -> usize {
+    let w = qs.len();
+    let b: usize = 0;
+    for p in 0..w {
+        if ((z >> (w - 1 - p)) & 1) == 1 {
+            b |= ((1 as usize) << qs[p]);
+        }
+    }
+    b
+}
+
+/// Whether the circuit `sub`, supplied for a parameter whose operator's
+/// arguments are `widths` qubits wide, leaves its argument `k`, given in the
+/// state `st` written at conductor `n`, in that state up to a phase whatever
+/// the other arguments hold: for each basis state of those, the argument is
+/// a multiple of `st` wherever it ends. `qpu` asks it of every operator
+/// supplied for a parameter that needs an argument kept, whichever device is
+/// to run the circuit.
+fn __keeps_state(sub: *const qpu::Circuit, widths: *const [u32], k: u32, st: *const [[string]], n: u32) -> Result<bool, qpu::Error> {
+    let total: usize = 0;
+    let start: usize = 0;
+    for i in 0..widths.len() {
+        if i == k as usize {
+            start = total;
+        }
+        total += widths[i] as usize;
+    }
+    let wk = widths[k as usize] as usize;
+    if total > KEEPS_WIDTH {
+        return Err(qpu::Error::Unsupported);
+    }
+    if sub.inputs.len() != total || sub.outputs.len() != total {
+        return Err(malformed("an operator supplied for more or fewer qubits than it takes"));
+    }
+    let (_, want) = exact_all(st, (48 / n) as usize)?;
+    // a basis state where the kept state has weight, to compare against
+    let z0 = 0;
+    while z0 < want.len() && is_zero(want[z0]) {
+        z0++;
+    }
+    if z0 == want.len() {
+        return Err(malformed("a kept state that is zero"));
+    }
+    // the kept argument's qubits as it is given, the first most
+    // significant
+    let given: [usize] = [];
+    for p in 0..wk {
+        given.push(start + p);
+    }
+    let mask = spread(((1 as usize) << wk) - 1, &given);
+    for x in 0..((1 as usize) << total) {
+        if (x & mask) != 0 {
+            continue;
+        }
+        let s = empty_sim(SEED);
+        for _ in 0..total {
+            fresh(&s);
+        }
+        put(&s, 0, [0; 16]);
+        for z in 0..want.len() {
+            put(&s, x | spread(z, &given), want[z]);
+        }
+        let g = qpu::Frame::for_circuit(sub, [], []);
+        for j in 0..total {
+            g.wires[sub.inputs[j] as usize] = j;
+            g.given[sub.inputs[j] as usize] = true;
+        }
+        exec(&s, &g, &sub.body, &[])?;
+        // where each argument qubit ends, and the kept argument's
+        let at: [usize] = [];
+        for j in 0..total {
+            at.push(g.wires[sub.outputs[j] as usize]);
+        }
+        let kept: [usize] = [];
+        for p in 0..wk {
+            kept.push(at[start + p]);
+        }
+        let seen: [usize] = [];
+        for b in 0..size(&s) {
+            if is_zero(amp(&s, b)) {
+                continue;
+            }
+            // the other arguments' bits, each in its place as given
+            let y: usize = 0;
+            for j in 0..total {
+                if (j < start || j >= start + wk) && bit(b, at[j]) {
+                    y |= ((1 as usize) << j);
+                }
+            }
+            let first = true;
+            for v in &seen {
+                if *v == y {
+                    first = false;
+                }
+            }
+            if !first {
+                continue;
+            }
+            seen.push(y);
+            // the kept argument's amplitudes beside `y`, against `want`
+            let beside: usize = 0;
+            for j in 0..total {
+                if (j < start || j >= start + wk) && ((y >> j) & 1) == 1 {
+                    beside |= ((1 as usize) << at[j]);
+                }
+            }
+            let v0 = amp(&s, beside | spread(z0, &kept));
+            for z in 0..want.len() {
+                let lhs = times(amp(&s, beside | spread(z, &kept)), want[z0]);
+                let rhs = times(v0, want[z]);
+                for c in 0..16 {
+                    if lhs[c] != rhs[c] {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+    }
+    Ok(true)
+}

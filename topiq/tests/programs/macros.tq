@@ -1,0 +1,61 @@
+// expect: exit 0
+// stdout: macros::Packet [u8; 4] 10 4 3 7 40 123 ok
+#unit classical
+
+// Generics bounded by what their arguments can do, asked by introspection.
+fn sum<T>(xs: *[T]) -> T where @has_method(T, "$add") && @has_method(T, "$copy") {
+    let acc = xs[0];
+    for i in 1..xs.len() { acc = acc + xs[i]; }
+    acc
+}
+
+struct Header { tag: u8, len: u32 }
+struct Packet { tag: u8, len: u32, payload: [u8] }
+struct Other { len: u32, tag: u8 }
+enum Shape { Circle(f64), Square(f64), Dot }
+
+impl Header {
+    fn size(self: *Header) -> u32 { self.len }
+}
+
+let OFF: const usize = @field_offset(Packet, "len");
+let N: const usize = @field_count(Packet);
+
+fn show(n: i64) {
+    if n >= 10 { show(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+fn kind(k: TypeKind) -> i64 {
+    match k { TypeKind::Struct => 1, TypeKind::Enum => 2, TypeKind::Scalar => 3, _ => 9 }
+}
+
+fn main() -> i32 {
+    @static_assert(@is_prefix_of(Header, Packet), "Header is a prefix of Packet");
+    @static_assert(!@is_prefix_of(Other, Packet), "Other is not");
+    @static_assert(@sizeof(Header) == 8, "eight bytes");
+    print(@name_of(Packet));
+    print(" ");
+    print(@name_of([u8; 4]));
+    print(" ");
+    let a = [1, 2, 3, 4];
+    show(sum(&a));
+    print(" ");
+    show(OFF as i64);
+    print(" ");
+    show(N as i64);
+    print(" ");
+    let x: @field_type(Packet, "len") = 7;
+    show(x as i64);
+    print(" ");
+    let h = Header { tag: 1, len: 40 };
+    show(@method(Header, "size")(&h) as i64);
+    print(" ");
+    show(kind(@kind_of(Header)) * 100 + kind(@kind_of(Shape)) * 10 + kind(@kind_of(u8)));
+    let all = @has_field(Packet, "payload") && !@has_field(Packet, "nope") && @variant_count(Shape) == 3
+        && @has_method(Header, "size") && !@has_method(Header, "area") && @aborts(1 / 0) && !@aborts(1 + 1)
+        && @target_has("dynamic_lifting") && !@is_quantum(u8) && @is_const(const u8) && !@is_const(u8);
+    print(if all { " ok\n" } else { " wrong\n" });
+    0
+}

@@ -1,0 +1,14 @@
+// Half of two units that import each other.
+#unit classical
+import odd;
+
+struct Tree { size: i64, forest: odd::Forest }
+
+let STEP: const i64 = odd::BASE + 1;
+
+fn is_even(n: i64) -> bool {
+    if n == 0 { true } else { odd::is_odd(n - 1) }
+}
+
+// Generic, and made in `odd` for `odd`'s own type.
+fn pair<T>(a: T, b: T) -> odd::Pair<T> { odd::Pair { a: a, b: b } }

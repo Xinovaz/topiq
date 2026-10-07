@@ -1,0 +1,17 @@
+// expect: abort RA11 at 10
+#unit classical
+
+struct Square { side: f64 }
+
+impl Square {
+    fn area(self: *Square) -> f64 { self.side * self.side }
+}
+
+fn wrong(m: *MethodInfo, p: *any) -> i64 { invoke::<fn(*any) -> i64>(m.addr, p) }
+
+fn main() -> i32 {
+    let q = Square { side: 2.0 };
+    let p: *any = &q;
+    let ti = @typeinfo_of(p);
+    wrong(&ti.methods[0], p) as i32
+}

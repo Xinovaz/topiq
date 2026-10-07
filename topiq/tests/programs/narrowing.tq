@@ -1,0 +1,11 @@
+// expect: abort RA03 at 6
+// A conversion to a narrower type whose value does not fit.
+#unit classical
+
+fn to_byte(x: i64) -> u8 {
+    x as u8
+}
+
+fn main() -> i32 {
+    to_byte(300) as i32
+}

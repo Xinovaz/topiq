@@ -1,0 +1,75 @@
+// Registers whose length is known only as the circuit runs.
+#unit quantum
+import gates;
+
+// `n` qubits, each flipped, then measured: how many are one.
+[entry]
+fn ones(n: u32) -> u32 {
+    let r: [qubit] = [];
+    for i in 0..n {
+        let q: qubit;
+        r.push(q);
+    }
+    for i in 0..r.len() {
+        x(&r[i]);
+    }
+    let m = measure r;
+    let c: u32 = 0;
+    for i in 0..m.len() {
+        if m[i] { c = c + 1; }
+    }
+    c
+}
+
+// A GHZ state of `n` qubits: whether every qubit measured the same.
+[entry]
+fn ghz(n: u32) -> bool {
+    let r: [qubit] = [];
+    for i in 0..n {
+        let q: qubit;
+        r.push(q);
+    }
+    h(&r[0]);
+    for i in 1..r.len() {
+        cx(&r[i - 1], &r[i]);
+    }
+    let m = measure r;
+    let same = true;
+    for i in 0..m.len() {
+        if m[i] != m[0] { same = false; }
+    }
+    same
+}
+
+// What `n` rounds measure, kept in an array grown as the circuit runs.
+[entry]
+fn rounds(n: u32) -> u32 {
+    let seen: [bool] = [];
+    for i in 0..n {
+        let s: [qubit; 1] = prep |1>;
+        let m = measure s;
+        seen.push(m[0]);
+    }
+    let c: u32 = 0;
+    for i in 0..seen.len() {
+        if seen[i] { c = c + 1; }
+    }
+    c
+}
+
+// The register's length before it grows again, and after: its qubits are
+// forgotten.
+[entry]
+fn lengths(n: u32) -> (u32, u32) {
+    let r: [qubit] = [];
+    for i in 0..n {
+        let q: qubit;
+        r.push(q);
+    }
+    let before = r.len() as u32;
+    let q: qubit;
+    r.push(q);
+    let after = r.len() as u32;
+    forget r;
+    (before, after)
+}

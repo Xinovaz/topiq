@@ -1,0 +1,16 @@
+// The Grover iterate, typed over its orbit.
+#unit quantum
+import gates;
+
+// The three points of the orbit, written out. N = 4, marked point |11>.
+cover Orb  = fin{ (|00> + |01> + |10> + |11>) / 2,
+                  |11>,
+                  (-|00> - |01> - |10> + |11>) / 2 };
+gauge GOrb = fid((|00> + |01> + |10> + |11>) / 2);
+base  Torb = [qubit; 2], Orb, GOrb;
+
+[cover: Orb] [gauge: GOrb]
+[expect: contract = cyc]
+fn iterate(r: *[qubit; 2]) { oracle(r); diffuse(r); }
+
+chain Loop = iterate : Torb -> Torb ;

@@ -1,0 +1,124 @@
+// expect: exit 0
+// stdout: 7 true false 7 / 5 / r=2.5 / 9 / 90 / NoSuchField NoSuchMethod SignatureMismatch / 0 0 NotConstructible / dropped dropped
+// Dynamic values: moving values into `dyn`, asking what they hold, reaching
+// fields and calling methods by name.
+
+#unit classical
+// `dyn` is a library unit, so `dyn::of` needs no import.
+
+struct Circle { r: f64, hits: i64 }
+
+impl Circle {
+    fn area(self: *Circle) -> f64 { 3.0 * self.r * self.r }
+    fn scaled(self: *Circle, k: i64) -> i64 { self.hits * k }
+}
+
+struct Loud { id: i64 }
+
+impl Loud {
+    fn $drop(self: *Loud) { print(" dropped"); }
+}
+
+struct Holder { r: *i64 }
+
+fn show(n: i64) {
+    if n >= 10 { show(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+fn loud() {
+    let l1 = dyn::of(Loud { id: 1 });
+    let l2 = dyn::of(Loud { id: 2 });
+}
+
+fn error_name(e: dyn::Error) -> *[char] {
+    match e {
+        dyn::Error::NoSuchField => "NoSuchField",
+        dyn::Error::NoSuchMethod => "NoSuchMethod",
+        dyn::Error::SignatureMismatch => "SignatureMismatch",
+        dyn::Error::NotConstructible => "NotConstructible",
+        dyn::Error::Schema(_) => "Schema",
+    }
+}
+
+fn main() -> i32 {
+    let a = dyn::of(7 as i64);
+    let n = match dyn::borrow::<i64>(&a) { Some(p) => *p, None => 0 };
+    show(n);
+    print(if dyn::is::<i64>(&a) { " true" } else { " false" });
+    print(if dyn::is::<f64>(&a) { " true " } else { " false " });
+    match dyn::get::<i64>(a) {
+        Ok(v) => show(v),
+        Err(_) => print("?"),
+    }
+    print(" / ");
+
+    let b = dyn::of(5 as i64);
+    match b as i64 {
+        Some(v) => show(v),
+        None => print("?"),
+    }
+    print(" / ");
+
+    let c = dyn::of(Circle { r: 2.5, hits: 3 });
+    match dyn::field(&c, "r") {
+        Some(p) => match p as *f64 {
+            Some(r) => if *r == 2.5 { print("r=2.5") } else { print("r=?") },
+            None => print("not f64"),
+        },
+        None => print("no r"),
+    }
+    print(" / ");
+
+    match dyn::set_field(&c, "hits", dyn::of(9 as i64)) {
+        Ok(()) => {}
+        Err(e) => print(error_name(e)),
+    }
+    match dyn::field(&c, "hits") {
+        Some(p) => match p as *i64 { Some(h) => show(*h), None => print("?") },
+        None => print("?"),
+    }
+    print(" / ");
+
+    let args = [dyn::of(10 as i64)];
+    match dyn::call(&c, "scaled", &args) {
+        Ok(r) => match dyn::get::<i64>(r) { Ok(v) => show(v), Err(_) => print("?") },
+        Err(e) => print(error_name(e)),
+    }
+    print(" / ");
+
+    match dyn::set_field(&c, "radius", dyn::of(1.0)) {
+        Ok(()) => {}
+        Err(e) => print(error_name(e)),
+    }
+    print(" ");
+    match dyn::call(&c, "perimeter", &[]) {
+        Ok(_) => {}
+        Err(e) => print(error_name(e)),
+    }
+    print(" ");
+    match dyn::call(&c, "scaled", &[]) {
+        Ok(_) => {}
+        Err(e) => print(error_name(e)),
+    }
+    print(" / ");
+
+    match dyn::make(@typeinfo(Circle)) {
+        Ok(z) => match dyn::get::<Circle>(z) {
+            Ok(v) => { show(v.hits); print(" "); show(v.r as i64); }
+            Err(_) => print("?"),
+        },
+        Err(e) => print(error_name(e)),
+    }
+    print(" ");
+    match dyn::make(@typeinfo(Holder)) {
+        Ok(_) => print("made"),
+        Err(e) => print(error_name(e)),
+    }
+    print(" /");
+
+    loud();
+    print("\n");
+    0
+}

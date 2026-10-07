@@ -1,0 +1,1353 @@
+//! The `qpu` library: devices, and running circuits on them.
+//!
+//! A classical program holds a quantum unit's `[entry]` operator as a circuit
+//! handle, `circuit<Sig>`, and runs it on a device: `connect` gives one, and
+//! `dev.run(c, args…)` runs `c` with its arguments, giving what the circuit
+//! measures as its kernel's outcome type, `KernelOf<Sig>`: the classical part
+//! of what the operator returns. The compiler checks the arguments against
+//! `Sig`: each classical parameter takes a value, each operator-typed one a
+//! handle to the circuit supplied for it, and each quantum one a register,
+//! `RegHandle`, which `prepare` may have put in a state and which is |0…0>
+//! otherwise. Calling a handle as a function, `c(args…)`, runs it on the
+//! device `calls()` gives, aborting where it is called if the run fails.
+//!
+//! The same arguments follow the circuit in two other calls, which show
+//! more than one outcome. `dev.sample(c, o, args…)` runs `c` `o.shots` times
+//! and gives each outcome seen, in the order first seen, with how many runs
+//! gave it: `[Count<KernelOf<Sig>>]`. `dev.distribution(c, args…)` draws
+//! nothing: it follows each way the circuit's measurements can go, and gives
+//! each outcome with its probability, exactly, as a `cyclo<48>`, which is
+//! real: `[Chance<KernelOf<Sig>>]`. A probability is a ratio of squared
+//! magnitudes, which need not be rational. So a test can check a circuit's
+//! statistics exactly, as the swap test's against the inner product of the
+//! states it is given.
+//!
+//! A device is named by a description, `scheme://path?key=value&…`, which
+//! `connect` reads into a `Desc`. What answers to it is a `Backend`: a kind
+//! of device, made of the functions that open one and run circuits on it.
+//! `register(at, b)` makes `b` answer at `at`, which is either
+//! `scheme://path`, for that one device, or `scheme://`, for every path of
+//! the scheme; `connect` looks for the first, then the second, and gives
+//! `NoDevice` when neither is registered. The backend reads the rest of the
+//! description, its parameters included, as it opens the device.
+//!
+//! The `sim` library's exact simulator answers at `sim://exact`, registered
+//! before anything else is, and so can never be replaced; its description
+//! takes a `seed`. Every other device is registered by the program, or by a
+//! module it loads, before it connects.
+//!
+//! A backend must open devices and run jobs. A `Job` is one circuit, read
+//! from its document, with what one run of it is given and how many runs to
+//! make; the backend gives back each outcome seen with its count, a
+//! `Tally`. The rest is optional, and a device whose backend lacks a part
+//! answers as one that cannot do it: `distribution` and the estimates are
+//! `Unsupported`, and `reseed` does nothing, since there is no generator to
+//! seed.
+//!
+//! A backend for a device elsewhere, such as a quantum computer reached
+//! through its maker's interface, sends the job's document, `Job.doc`, or
+//! its own translation of `Job.circuit`, and reads back the bits each run
+//! measured. `Job::outcome` turns one run's bits into the outcome the
+//! circuit gives the caller, for any circuit that measures into each bit
+//! once and does not lift; the backend counts them into its `Tally`. How it
+//! reaches the device is its own affair: `qpu` asks only for outcomes, so
+//! the same program runs on a simulator and on hardware.
+//!
+//! An operator supplied for an operator-typed parameter is checked before
+//! the circuit runs, whichever device runs it, against what the circuit
+//! needs of it: that it measures, forgets and lifts nothing (`NotMonic`),
+//! and that it leaves each argument the circuit kicks a phase back through
+//! in the state the circuit gives it there, whatever its other arguments
+//! hold (`NotKept`), which is tried exactly for each basis state of those
+//! on the exact simulator.
+//!
+//! A circuit runs from its document (`Circuit`), the TCON the compiler writes
+//! for each entry operator, which also carries its judgement. The circuit
+//! algebra of the `circuit` library builds new documents from old.
+#unit classical
+import tcon;
+import dyn;
+import judge;
+import quon;
+import sim;
+
+/////////////
+// DEVICES //
+/////////////
+
+/// A device circuits run on.
+struct Device { id: usize }
+
+/// How a run goes: how many times the circuit runs, the outcome `run_opts`
+/// gives being the one seen most often, the first to be seen that often on a
+/// tie, and `sample` giving each with its count; and the seed of the
+/// generator measurements draw from, the device's own when there is none.
+struct RunOpts { shots: u32, seed: u64? }
+
+/// A register of `width` qubits on a device.
+struct RegHandle { device: usize, index: usize, width: u32 }
+
+/// Why a device could not be had, or a circuit not run.
+enum Error {
+    /// No device answers to this description.
+    NoDevice(string),
+    /// A backend answers where this one was to be registered already.
+    Registered(string),
+    /// An argument the circuit cannot run with, and why.
+    BadArgument(string),
+    /// The operator supplied for this operator-typed parameter measures,
+    /// forgets or lifts, where the circuit needs one that does not.
+    NotMonic(string),
+    /// The operator supplied for this operator-typed parameter does not
+    /// leave an argument in the state the circuit gives it there, which the
+    /// circuit relies on to give its ancilla back.
+    NotKept(string),
+    /// The circuit is an instrument, which has no adjoint.
+    NotUnitary,
+    /// The first circuit's target base type is not the second's source.
+    EndpointMismatch,
+    /// What the device cannot do.
+    Unsupported,
+    /// The circuit named a qubit past the end of a register whose length is
+    /// known only as it runs.
+    Index,
+    /// A circuit's document that does not read, and why.
+    Malformed(string),
+}
+
+/// A device's description, read: `scheme://path?key=value&…`, each
+/// parameter in the order written. A parameter written without `=` has an
+/// empty value.
+struct Desc { text: string, scheme: string, path: string, params: [(string, string)] }
+
+impl Desc {
+    /// The value of the parameter `key`, the last one written when it is
+    /// written more than once.
+    fn param(self: *const Desc, key: *const [char]) -> string? {
+        let found: string? = None;
+        for p in &self.params {
+            if str::eq(&p.0, key) {
+                found = Some(clone(&p.1));
+            }
+        }
+        found
+    }
+}
+
+/// A kind of device: how its devices are opened, and how circuits run on
+/// them. `open` gives the backend's own number for the device it opens, and
+/// every other function is given that number back.
+///
+/// - `open` opens the device the description names, or refuses it:
+///   `BadArgument` for a parameter it does not take, `NoDevice` for a device
+///   it cannot reach.
+/// - `run` runs the job `shots` times, and gives each outcome seen, in the
+///   order first seen, with its count. A seed in the job is the seed of the
+///   generator the runs draw from, when the device has one.
+/// - `distribution`, when the device can compute it, gives each outcome of
+///   the job's circuit with its probability, exactly, drawing nothing.
+/// - `reseed` starts the device's generator again from a seed, zero naming
+///   the device's fixed seed.
+/// - `estimate` estimates the phase a monic circuit gives a basis state of
+///   its qubits, from a ladder of the given number of control bits.
+struct Backend {
+    open: fn(*const Desc) -> Result<usize, Error>,
+    run: fn(usize, *const Job) -> Result<Tally, Error>,
+    distribution: (fn(usize, *const Job) -> Result<Spread, Error>)?,
+    reseed: (fn(usize, u64))?,
+    estimate: (fn(usize, *const Circuit, u32, u8) -> Result<phase<48>, Error>)?,
+}
+
+/// What a device is asked to do: run a circuit `shots` times, at least
+/// once. The circuit is read from its document, `doc`; `params` are its
+/// classical arguments, `subs` the circuits supplied for its operator-typed
+/// parameters, already checked, and `states` the states its registers start
+/// in, |0…0> where there is none. `seed` is the options' seed, if they gave
+/// one.
+struct Job { circuit: Circuit, doc: string, params: [Val], subs: [Circuit], states: [quon::State?], shots: u32, seed: u64? }
+
+impl Job {
+    /// What the circuit gives the caller when what it measures gives
+    /// `bits`, bit `b` being what the measurement into bit `b` gave: for a
+    /// device that runs the circuit elsewhere, applying the operations a
+    /// measured bit controls as it goes, and gives back the bits it
+    /// measured. A bit holds one outcome, so a circuit that measures inside
+    /// a loop cannot be read so; nor can one whose structure depends on what
+    /// it measures, through `lift`, or that grows a register as it runs.
+    /// Those are `Unsupported`. `bits` must be as many as the circuit
+    /// measures into.
+    fn outcome(self: *const Job, bits: *const [bool]) -> Result<Val, Error> {
+        let c = &self.circuit;
+        if c.dynamic {
+            return Err(Error::Unsupported);
+        }
+        if bits.len() != c.bits as usize {
+            return Err(bad("not as many bits as the circuit measures into"));
+        }
+        let f = Frame::for_circuit(c, clone(&self.params), []);
+        for i in 0..bits.len() {
+            f.bits[i] = bits[i];
+        }
+        classical(&f, &c.body, false)?;
+        match &c.result {
+            Some(e) => eval(e, &f),
+            None => Ok(Val::Agg([])),
+        }
+    }
+}
+
+/// Runs the classical operations of `ops`, which set the variables an
+/// outcome reads; `looped` when they repeat, inside a loop.
+static fn classical(f: *Frame, ops: *const [Op], looped: bool) -> Result<(), Error> {
+    for op in ops {
+        match op {
+            Op::Let { var, value } => {
+                f.vars[var as usize] = eval(value, f)?;
+            }
+            Op::If { cond, then, els } => {
+                if eval(cond, f)?.as_bool()? {
+                    classical(f, then, looped)?;
+                } else {
+                    classical(f, els, looped)?;
+                }
+            }
+            Op::For { var, start, end, body } => {
+                let a = eval(start, f)?.as_int()?;
+                let e = eval(end, f)?.as_int()?;
+                for i in a..e {
+                    f.vars[var as usize] = Val::Int(i);
+                    classical(f, body, true)?;
+                }
+            }
+            Op::Measure { wire, bit } => {
+                if looped {
+                    return Err(Error::Unsupported);
+                }
+            }
+            Op::Lift { var, value } => { return Err(Error::Unsupported); }
+            Op::MeasureAll { reg, var } => { return Err(Error::Unsupported); }
+            Op::Grow { reg, wire } => { return Err(Error::Unsupported); }
+            Op::Element { wire, reg, index } => { return Err(Error::Unsupported); }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Each outcome of a job's runs, in the order first seen, with how many
+/// runs gave it.
+struct Tally { outcomes: [Val], counts: [u32] }
+
+impl Tally {
+    /// Counts `n` more runs that gave `v`.
+    fn add(self: *Tally, v: Val, n: u32) {
+        for i in 0..self.outcomes.len() {
+            if self.outcomes[i] == v {
+                self.counts[i] += n;
+                return;
+            }
+        }
+        self.outcomes.push(v);
+        self.counts.push(n);
+    }
+}
+
+/// Each outcome of a job's circuit, in the order first reached, with its
+/// probability, exactly.
+struct Spread { outcomes: [Val], probabilities: [cyclo<48>] }
+
+impl Spread {
+    /// Adds `p` to the probability of `v`.
+    fn add(self: *Spread, v: Val, p: cyclo<48>) {
+        for i in 0..self.outcomes.len() {
+            if self.outcomes[i] == v {
+                self.probabilities[i] += p;
+                return;
+            }
+        }
+        self.outcomes.push(v);
+        self.probabilities.push(p);
+    }
+}
+
+/// A backend, and the description it answers at.
+struct Entry { at: string, backend: Backend }
+
+/// The backends registered.
+let BACKENDS: [Entry] = [];
+
+/// A connected device: its backend, by its place in `BACKENDS`, the
+/// backend's own number for it, and its registers.
+struct DeviceState { backend: usize, handle: usize, registers: [Register] }
+struct Register { width: u32, state: quon::State? }
+
+let DEVICES: [DeviceState] = [];
+
+/// The device calling a circuit handle as a function runs on, once there is
+/// one: a single device, so that each call draws where the last left off.
+let CALLS: [usize] = [];
+
+/// Registers the backends the library provides, before any other.
+static fn builtins() {
+    if BACKENDS.len() == 0 {
+        BACKENDS.push(Entry { at: "sim://exact", backend: sim::exact() });
+    }
+}
+
+/// The description `text`, read; `None` when it has no scheme.
+static fn desc_of(text: *const [char]) -> Desc? {
+    let cut = text.len();
+    for i in 0..text.len() {
+        if cut == text.len() && i + 3 <= text.len() && text[i] == ':' && text[i + 1] == '/' && text[i + 2] == '/' {
+            cut = i;
+        }
+    }
+    if cut == 0 || cut == text.len() {
+        return None;
+    }
+    let scheme: [char] = [];
+    for i in 0..cut {
+        scheme.push(text[i]);
+    }
+    // the path runs to the first `?`, the parameters after it
+    let path: [char] = [];
+    let rest: [char] = [];
+    let asked = false;
+    for i in (cut + 3)..text.len() {
+        if asked {
+            rest.push(text[i]);
+        } else if text[i] == '?' {
+            asked = true;
+        } else {
+            path.push(text[i]);
+        }
+    }
+    let params: [(string, string)] = [];
+    if asked {
+        for piece in str::split(&rest, "&") {
+            if piece.len() == 0 {
+                continue;
+            }
+            let key: [char] = [];
+            let value: [char] = [];
+            let at_value = false;
+            for ch in &piece.chars {
+                if !at_value && *ch == '=' {
+                    at_value = true;
+                } else if at_value {
+                    value.push(*ch);
+                } else {
+                    key.push(*ch);
+                }
+            }
+            params.push((string { chars: key }, string { chars: value }));
+        }
+    }
+    Some(Desc { text: clone(text), scheme: string { chars: scheme }, path: string { chars: path }, params: params })
+}
+
+/// The place in `BACKENDS` of the backend registered at `at`, if one is.
+static fn registered_at(at: *const [char]) -> usize? {
+    for i in 0..BACKENDS.len() {
+        if str::eq(&BACKENDS[i].at, at) {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Makes the backend `b` answer at `at`: `scheme://path` for the one device
+/// of that description, or `scheme://` for every path of the scheme. A
+/// description names its device by scheme and path alone, so `at` has no
+/// parameters.
+///
+/// # Errors
+///
+/// `Registered` when a backend answers at `at` already, the exact simulator
+/// at `sim://exact` among them; `BadArgument` when `at` has no scheme, or
+/// has parameters.
+fn register(at: *const [char], b: Backend) -> Result<(), Error> {
+    builtins();
+    let d = match desc_of(at) {
+        Some(d) => d,
+        None => { return Err(bad("a backend is registered at scheme://path or scheme://")); }
+    };
+    if d.params.len() > 0 || d.text.len() > d.scheme.len() + 3 + d.path.len() {
+        return Err(bad("a backend is registered at a description without parameters"));
+    }
+    if registered_at(at).is_some() {
+        return Err(Error::Registered(at));
+    }
+    BACKENDS.push(Entry { at: at, backend: b });
+    Ok(())
+}
+
+/// The device `desc` describes, opened by the backend that answers to it:
+/// the one registered at its scheme and path, or else the one registered at
+/// its scheme alone.
+///
+/// # Errors
+///
+/// `NoDevice` when no backend answers to `desc`; otherwise whatever the
+/// backend's `open` gives, such as `BadArgument` for a parameter it does
+/// not take.
+fn connect(desc: *const [char]) -> Result<Device, Error> {
+    builtins();
+    let d = match desc_of(desc) {
+        Some(d) => d,
+        None => { return Err(Error::NoDevice(desc)); }
+    };
+    let one = d.scheme + "://" + d.path;
+    let every = d.scheme + "://";
+    let found = match registered_at(&one) {
+        Some(i) => i,
+        None => match registered_at(&every) {
+            Some(i) => i,
+            None => { return Err(Error::NoDevice(desc)); }
+        },
+    };
+    let open = BACKENDS[found].backend.open;
+    let handle = open(&d)?;
+    DEVICES.push(DeviceState { backend: found, handle: handle, registers: [] });
+    Ok(Device { id: DEVICES.len() - 1 })
+}
+
+/// A seed read from the system clock, different on each run of a program:
+/// the clock's ticks, mixed so that nearby times give unrelated seeds, and
+/// never zero.
+fn clock_seed() -> u64 {
+    let z = wrapping_add(__clock(), 11400714819323198485);
+    z = wrapping_mul(z ^ (z >> 30), 13787848793156543929);
+    z = wrapping_mul(z ^ (z >> 27), 10723151780598845931);
+    z ^= z >> 31;
+    if z == 0 { sim::SEED } else { z }
+}
+
+/// The device calling a circuit handle as a function, `c(args…)`, runs on:
+/// the same one for every call, the one `use_for_calls` chose, or else a
+/// device of the exact simulator connected the first time it is asked for.
+fn calls() -> Device {
+    if CALLS.len() == 0 {
+        let dev = connect("sim://exact").unwrap();
+        CALLS.push(dev.id);
+    }
+    Device { id: CALLS[0] }
+}
+
+/// Makes `dev` the device every call of a circuit handle as a function,
+/// `c(args…)`, runs on from here on.
+fn use_for_calls(dev: *const Device) {
+    if CALLS.len() == 0 {
+        CALLS.push(dev.id);
+    } else {
+        CALLS[0] = dev.id;
+    }
+}
+
+/// The backend the device `id` belongs to, and the backend's number for it.
+static fn backend_of(id: usize) -> (*const Backend, usize) {
+    let st = &DEVICES[id];
+    (&BACKENDS[st.backend].backend, st.handle)
+}
+
+impl RegHandle {
+    fn $copy(self: *const RegHandle) -> RegHandle {
+        RegHandle { device: self.device, index: self.index, width: self.width }
+    }
+}
+
+impl Device {
+    fn $copy(self: *const Device) -> Device {
+        Device { id: self.id }
+    }
+
+    /// An estimate of the phase `c` gives the basis state `sector` of the
+    /// qubits it takes, that state's number read with the first qubit most
+    /// significant, when `c` keeps that state, up to that phase: found by
+    /// running a ladder of `bits` control qubits, the j-th controlling `c`
+    /// repeated 2^j times, and reading the phase off them. It is a
+    /// measurement, not a judgement: exact when the phase is a whole number
+    /// of 2^bits-th parts of a turn, and a draw otherwise. `bits` is from 1
+    /// to 4, which the 48ths of a turn hold; `c` must take no classical
+    /// value or operator, and be monic, since each rung controls it. A
+    /// device whose backend cannot estimate gives `Unsupported`.
+    fn estimate_stat<S>(self: *const Device, c: circuit<S>, sector: u32, bits: u8) -> Result<phase<48>, Error> {
+        __estimate(self, __circuit_doc(c), sector, bits)
+    }
+
+    /// The estimate `estimate_stat` gives of each basis state of the qubits
+    /// `c` takes, in order: at most 8 qubits.
+    fn estimate_sector<S>(self: *const Device, c: circuit<S>, bits: u8) -> Result<[phase<48>], Error> {
+        __estimate_all(self, __circuit_doc(c), bits)
+    }
+
+    /// Starts the device's generator again from `seed`, the fixed seed when
+    /// it is zero, as for `RunOpts`. A device without a generator ignores
+    /// it.
+    fn reseed(self: *const Device, seed: u64) {
+        let (b, h) = backend_of(self.id);
+        match b.reseed {
+            Some(f) => { f(h, seed); }
+            None => {}
+        }
+    }
+
+    /// A register of `width` qubits on the device.
+    fn register(self: *const Device, width: u32) -> RegHandle {
+        DEVICES[self.id].registers.push(Register { width: width, state: None });
+        RegHandle { device: self.id, index: DEVICES[self.id].registers.len() - 1, width: width }
+    }
+}
+
+/// Puts the register `r` in the state `s`, which the next run taking `r`
+/// starts from. The state must be of as many qubits as the register, and a
+/// unit vector, exactly.
+fn prepare(s: *const quon::State, r: RegHandle) -> Result<(), Error> {
+    if s.width != r.width {
+        return Err(bad("the state's width is not the register's"));
+    }
+    if !quon::norm_check(s) {
+        return Err(bad("the state is not a unit vector"));
+    }
+    DEVICES[r.device].registers[r.index].state = Some(clone(s));
+    Ok(())
+}
+
+/// What `dev.run(c, args…)` is: the classical arguments as `dyn` values, the
+/// documents of the circuits supplied for operator-typed parameters, and the
+/// registers for quantum ones, each in the order the operator takes them.
+fn __run<K>(dev: *const Device, doc: *const [char], args: [dyn], slots: [*[char]], regs: [RegHandle]) -> Result<K, Error> {
+    let o = RunOpts { shots: 1, seed: None };
+    __run_opts::<K>(dev, &o, doc, args, slots, regs)
+}
+
+/// What calling a circuit handle as a function, `c(args…)`, is: a run on
+/// the device `calls()` gives, which the caller unwraps. Every call runs on
+/// the same device: a fresh one each time would start each run's generator
+/// from the same seed, and so give every call the same draws.
+fn __call<K>(doc: *const [char], args: [dyn], slots: [*[char]], regs: [RegHandle]) -> Result<K, Error> {
+    __run::<K>(&calls(), doc, args, slots, regs)
+}
+
+/// What `dev.run_opts(c, o, args…)` is.
+fn __run_opts<K>(dev: *const Device, o: *const RunOpts, doc: *const [char], args: [dyn], slots: [*[char]], regs: [RegHandle]) -> Result<K, Error> {
+    let v = __run_value(dev, o, doc, &args, &slots, &regs)?;
+    __bind_kernel::<K>(&v)
+}
+
+//////////////////////////
+// A CIRCUIT'S DOCUMENT //
+//////////////////////////
+
+/// A circuit.
+struct Circuit {
+    name: string,
+    sig: string,
+    conductor: u32,
+    params: [Param],
+    slots: [Slot],
+    inputs: [u32],
+    registers: [u32],
+    outputs: [u32],
+    nodes: [Node],
+    wires: u32,
+    bits: u32,
+    vars: u32,
+    grown: u32,
+    body: [Op],
+    result: Expr?,
+    dynamic: bool,
+    judgment: judge::Judgment?,
+    source: string,
+    target: string,
+}
+
+/// A classical parameter: its name and type.
+struct Param { name: string, ty: string }
+
+/// An operator-typed parameter: the qubits each of its parameters names,
+/// whether the circuit needs what is supplied monic, and the arguments it
+/// must leave as they are given.
+struct Slot { name: string, widths: [u32], monic: bool, keeps: [Keep] }
+struct Keep { arg: u32, state: [[string]] }
+
+/// A processor node the circuit names, and its wire.
+struct Node { node: u64, wire: u32 }
+
+/// A qubit an operation is controlled on, and on which of its values.
+struct Control { wire: u32, on: bool }
+
+/// One operation.
+enum Op {
+    Gate { gate: Gate, targets: [u32], controls: [Control] },
+    Unitary { size: u32, entries: [[string]], targets: [u32], controls: [Control] },
+    Measure { wire: u32, bit: u32 },
+    Alloc { wire: u32 },
+    Release { wire: u32 },
+    Forget { wire: u32 },
+    If { cond: Expr, then: [Op], els: [Op] },
+    For { var: u32, start: Expr, end: Expr, body: [Op] },
+    Let { var: u32, value: Expr },
+    Lift { var: u32, value: Expr },
+    Call { slot: u32, args: [[u32]], controls: [Control], adjoint: bool },
+    Grow { reg: u32, wire: u32 },
+    Element { wire: u32, reg: u32, index: Expr },
+    MeasureAll { reg: u32, var: u32 },
+}
+
+/// A gate before control.
+enum Gate { X, Y, Z, H, S, Sdg, T, Tdg, Swap, Phase(Angle), GPhase(Angle) }
+
+/// An angle: a whole number of the conductor's parts of a turn, known or
+/// computed as the circuit runs.
+enum Angle { Fixed(u32), Runtime(Expr) }
+
+/// A classical expression.
+enum Expr {
+    Value(Const),
+    Bit(u32),
+    Var(u32),
+    Param(u32),
+    Unary(string, [Expr]),
+    Binary(string, [Expr]),
+    Logical(string, [Expr]),
+    Cast([Expr], string),
+    Index([Expr]),
+    Field([Expr], u32),
+    Array([Expr]),
+    Struct([Expr]),
+    Variant(u32, [Expr]),
+    Is([Expr], u32),
+    Payload([Expr], u32),
+    Select([Expr]),
+    RegLen(u32),
+    Len([Expr]),
+    Append([Expr]),
+}
+
+/// A value known when the circuit was made.
+enum Const {
+    Int(string, string),
+    Float(string, string),
+    Bool(bool),
+    Char(char),
+    Void,
+    Array([Const]),
+    Struct([Const]),
+    Variant(u32, [Const]),
+}
+
+/// The circuit a document holds.
+fn __circuit_of_doc(doc: *const [char]) -> Result<Circuit, Error> {
+    match tcon::parse::<Circuit>(doc) {
+        Ok(c) => {
+            if c.conductor == 0 || 48 % c.conductor != 0 {
+                return Err(malformed("a conductor that does not divide 48"));
+            }
+            Ok(c)
+        }
+        Err(e) => Err(Error::Malformed(e.detail)),
+    }
+}
+
+/// Whether the operations measure, forget and lift nothing.
+fn __is_monic(ops: *const [Op]) -> bool {
+    for op in ops {
+        match op {
+            Op::Measure { wire, bit } => { return false; }
+            Op::Forget { wire } => { return false; }
+            Op::Lift { var, value } => { return false; }
+            Op::MeasureAll { reg, var } => { return false; }
+            Op::If { cond, then, els } => {
+                if !__is_monic(then) || !__is_monic(els) {
+                    return false;
+                }
+            }
+            Op::For { var, start, end, body } => {
+                if !__is_monic(body) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+////////////
+// VALUES //
+////////////
+
+/// A classical value as the circuit computes with it: an integer, whatever
+/// its type, a `bool`, a `char`, a structure, tuple or array of values, or
+/// a variant by its number, with its fields.
+enum Val { Int(i64), Bool(bool), Char(char), Agg([Val]), Var(u32, [Val]) }
+
+static fn bad(why: *const [char]) -> Error {
+    Error::BadArgument(clone(why))
+}
+
+/// The value a `dyn` argument holds.
+static fn val_of_dyn(d: *const dyn) -> Result<Val, Error> {
+    let text = dyn::emit(d);
+    let v = match tcon::parse_dyn(&text) {
+        Ok(v) => v,
+        Err(e) => { return Err(Error::BadArgument(e.detail)); }
+    };
+    val_of(&v, dyn::type_of(d))
+}
+
+/// The document tree `v` as a value of the type `ti` describes.
+static fn val_of(v: *const tcon::Value, ti: *const TypeInfo) -> Result<Val, Error> {
+    match ti.kind {
+        TypeKind::Scalar => match v {
+            tcon::Value::Int(i) => Ok(Val::Int(i)),
+            tcon::Value::Bool(b) => Ok(Val::Bool(b)),
+            tcon::Value::Str(s) => {
+                if s.len() == 1 { Ok(Val::Char(s[0])) } else { Err(bad("a string where a character is wanted")) }
+            }
+            _ => Err(bad("a value this circuit cannot take")),
+        },
+        TypeKind::Void => Ok(Val::Agg([])),
+        TypeKind::Array => items(v, ti),
+        TypeKind::DynArray => items(v, ti),
+        TypeKind::Struct => fields(v, ti.fields),
+        TypeKind::Tuple => match v {
+            tcon::Value::Arr(xs) => {
+                let out: [Val] = [];
+                for i in 0..xs.len() {
+                    out.push(val_of(&xs[i], ti.fields[i].ty)?);
+                }
+                Ok(Val::Agg(out))
+            }
+            _ => fields(v, ti.fields),
+        },
+        TypeKind::Enum => {
+            let name = match field_of(v, "$variant") {
+                Some(n) => match n {
+                    tcon::Value::Str(s) => clone(s),
+                    _ => { return Err(bad("an enumeration's value without its variant")); }
+                },
+                None => { return Err(bad("an enumeration's value without its variant")); }
+            };
+            for k in 0..ti.variants.len() {
+                if str::eq(ti.variants[k].name, &name) {
+                    return match fields(v, ti.variants[k].fields)? {
+                        Val::Agg(fs) => Ok(Val::Var(k as u32, fs)),
+                        _ => Err(bad("a variant's fields")),
+                    };
+                }
+            }
+            Err(bad("a variant the type does not have"))
+        }
+        _ => Err(bad("a value of a type a circuit cannot take")),
+    }
+}
+
+static fn items(v: *const tcon::Value, ti: *const TypeInfo) -> Result<Val, Error> {
+    match v {
+        tcon::Value::Arr(xs) => {
+            let out: [Val] = [];
+            for x in xs {
+                out.push(val_of(x, ti.elem)?);
+            }
+            Ok(Val::Agg(out))
+        }
+        _ => Err(bad("an array where one is wanted")),
+    }
+}
+
+static fn fields(v: *const tcon::Value, fs: *const [FieldInfo]) -> Result<Val, Error> {
+    let out: [Val] = [];
+    for f in fs {
+        match field_of(v, f.name) {
+            Some(x) => out.push(val_of(x, f.ty)?),
+            None => { return Err(bad("a structure's value without all its fields")); }
+        }
+    }
+    Ok(Val::Agg(out))
+}
+
+/// The field `name` of the object `v`.
+static fn field_of(v: *const tcon::Value, name: *const [char]) -> (*const tcon::Value)? {
+    match v {
+        tcon::Value::Obj(pairs) => {
+            for p in pairs {
+                if str::eq(&p.0, name) {
+                    return Some(&p.1);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// The value `v` of the type `ti` describes.
+fn __tcon_of(v: *const Val, ti: *const TypeInfo) -> Result<tcon::Value, Error> {
+    match v {
+        Val::Int(i) => Ok(tcon::Value::Int(i)),
+        Val::Bool(b) => Ok(tcon::Value::Bool(b)),
+        Val::Char(c) => Ok(tcon::Value::Str(string { chars: [c] })),
+        Val::Agg(xs) => match ti.kind {
+            TypeKind::Array => list_of(xs, ti.elem),
+            TypeKind::DynArray => list_of(xs, ti.elem),
+            TypeKind::Void => Ok(tcon::Value::Null),
+            // a tuple is written as the list of its elements
+            TypeKind::Tuple => {
+                if xs.len() != ti.fields.len() {
+                    return Err(malformed("an outcome that is not of its type"));
+                }
+                let out: [tcon::Value] = [];
+                for i in 0..xs.len() {
+                    out.push(__tcon_of(&xs[i], ti.fields[i].ty)?);
+                }
+                Ok(tcon::Value::Arr(out))
+            }
+            _ => object_of(xs, ti.fields, ""),
+        },
+        Val::Var(k, xs) => {
+            if ti.kind != TypeKind::Enum || (k as usize) >= ti.variants.len() {
+                return Err(malformed("an outcome that is not of its type"));
+            }
+            let vi = &ti.variants[k as usize];
+            object_of(xs, vi.fields, vi.name)
+        }
+    }
+}
+
+static fn list_of(xs: *const [Val], elem: *const TypeInfo) -> Result<tcon::Value, Error> {
+    let out: [tcon::Value] = [];
+    for x in xs {
+        out.push(__tcon_of(x, elem)?);
+    }
+    Ok(tcon::Value::Arr(out))
+}
+
+/// An object of the values `xs` for the fields `fs`, a variant's when
+/// `variant` names it.
+static fn object_of(xs: *const [Val], fs: *const [FieldInfo], variant: *const [char]) -> Result<tcon::Value, Error> {
+    if xs.len() != fs.len() {
+        return Err(malformed("an outcome that is not of its type"));
+    }
+    let pairs: [(string, tcon::Value)] = [];
+    if variant.len() > 0 {
+        pairs.push(("$variant", tcon::Value::Str(variant)));
+    }
+    for i in 0..xs.len() {
+        pairs.push((fs[i].name, __tcon_of(&xs[i], fs[i].ty)?));
+    }
+    Ok(tcon::Value::Obj(pairs))
+}
+
+// Two values are equal, `==`, when they are of one kind and hold the same.
+impl Val {
+    fn $eq(self: *const Val, o: *const Val) -> bool {
+        match self {
+            Val::Int(x) => match o { Val::Int(y) => x == y, _ => false },
+            Val::Bool(x) => match o { Val::Bool(y) => x == y, _ => false },
+            Val::Char(x) => match o { Val::Char(y) => x == y, _ => false },
+            Val::Agg(xs) => match o { Val::Agg(ys) => all_same(xs, ys), _ => false },
+            Val::Var(j, xs) => match o { Val::Var(k, ys) => j == k && all_same(xs, ys), _ => false },
+        }
+    }
+
+    /// The `bool` the value is.
+    fn as_bool(self: *const Val) -> Result<bool, Error> {
+        match self {
+            Val::Bool(b) => Ok(b),
+            _ => Err(malformed("a condition that is not a bool")),
+        }
+    }
+
+    /// The integer the value is.
+    fn as_int(self: *const Val) -> Result<i64, Error> {
+        match self {
+            Val::Int(i) => Ok(i),
+            _ => Err(malformed("an integer wanted")),
+        }
+    }
+}
+
+static fn all_same(xs: *const [Val], ys: *const [Val]) -> bool {
+    if xs.len() != ys.len() {
+        return false;
+    }
+    for i in 0..xs.len() {
+        if xs[i] != ys[i] {
+            return false;
+        }
+    }
+    true
+}
+
+////////////////////////////
+// EVALUATING EXPRESSIONS //
+////////////////////////////
+
+/// The value of the expression `e` in the frame `f`.
+fn eval(e: *const Expr, f: *const Frame) -> Result<Val, Error> {
+    match e {
+        Expr::Value(c) => constant(c),
+        Expr::Bit(b) => Ok(Val::Bool(f.bits[b as usize])),
+        Expr::Var(v) => Ok(clone(&f.vars[v as usize])),
+        Expr::Param(p) => Ok(clone(&f.params[p as usize])),
+        Expr::Unary(op, xs) => {
+            let x = eval(&xs[0], f)?;
+            match x {
+                Val::Bool(b) => Ok(Val::Bool(!b)),
+                Val::Int(i) => {
+                    if str::eq(op, "Neg") { Ok(Val::Int(-i)) } else { Ok(Val::Int(!i)) }
+                }
+                _ => Err(malformed("an operator applied to a value it does not take")),
+            }
+        }
+        Expr::Binary(op, xs) => {
+            let a = eval(&xs[0], f)?;
+            let b = eval(&xs[1], f)?;
+            binary(op, &a, &b)
+        }
+        Expr::Logical(op, xs) => {
+            let a = eval(&xs[0], f)?.as_bool()?;
+            if str::eq(op, "And") {
+                if !a { return Ok(Val::Bool(false)); }
+            } else if a {
+                return Ok(Val::Bool(true));
+            }
+            Ok(Val::Bool(eval(&xs[1], f)?.as_bool()?))
+        }
+        Expr::Cast(xs, ty) => eval(&xs[0], f),
+        Expr::Index(xs) => {
+            let a = eval(&xs[0], f)?;
+            let i = eval(&xs[1], f)?.as_int()?;
+            match a {
+                Val::Agg(items) => {
+                    if i < 0 || (i as usize) >= items.len() {
+                        return Err(malformed("an index out of range"));
+                    }
+                    Ok(clone(&items[i as usize]))
+                }
+                _ => Err(malformed("an index into what is not an array")),
+            }
+        }
+        Expr::Field(xs, k) => match eval(&xs[0], f)? {
+            Val::Agg(items) => Ok(clone(&items[k as usize])),
+            _ => Err(malformed("a field of what is not a structure")),
+        },
+        Expr::Array(xs) => Ok(Val::Agg(eval_all(xs, f)?)),
+        Expr::Struct(xs) => Ok(Val::Agg(eval_all(xs, f)?)),
+        Expr::Variant(k, xs) => Ok(Val::Var(k, eval_all(xs, f)?)),
+        Expr::Is(xs, k) => match eval(&xs[0], f)? {
+            Val::Var(j, _) => Ok(Val::Bool(j == k)),
+            _ => Err(malformed("a variant tested of what is not an enumeration")),
+        },
+        Expr::Payload(xs, k) => match eval(&xs[0], f)? {
+            Val::Var(_, items) => Ok(clone(&items[k as usize])),
+            _ => Err(malformed("a variant's field of what is not an enumeration")),
+        },
+        Expr::Select(xs) => {
+            if eval(&xs[0], f)?.as_bool()? { eval(&xs[1], f) } else { eval(&xs[2], f) }
+        }
+        Expr::RegLen(r) => Ok(Val::Int(f.regs[r as usize].len() as i64)),
+        Expr::Len(xs) => match eval(&xs[0], f)? {
+            Val::Agg(items) => Ok(Val::Int(items.len() as i64)),
+            _ => Err(malformed("the length of what is not an array")),
+        },
+        Expr::Append(xs) => match eval(&xs[0], f)? {
+            Val::Agg(items) => {
+                items.push(eval(&xs[1], f)?);
+                Ok(Val::Agg(items))
+            }
+            _ => Err(malformed("an element added to what is not an array")),
+        },
+    }
+}
+
+static fn eval_all(xs: *const [Expr], f: *const Frame) -> Result<[Val], Error> {
+    let out: [Val] = [];
+    for x in xs {
+        out.push(eval(x, f)?);
+    }
+    Ok(out)
+}
+
+static fn malformed(why: *const [char]) -> Error {
+    Error::Malformed(clone(why))
+}
+
+static fn constant(c: *const Const) -> Result<Val, Error> {
+    match c {
+        Const::Int(digits, ty) => match str::parse::<i64>(digits) {
+            Some(i) => Ok(Val::Int(i)),
+            None => Err(Error::Unsupported),
+        },
+        Const::Float(bits, ty) => Err(Error::Unsupported),
+        Const::Bool(b) => Ok(Val::Bool(b)),
+        Const::Char(c) => Ok(Val::Char(c)),
+        Const::Void => Ok(Val::Agg([])),
+        Const::Array(xs) => Ok(Val::Agg(constants(xs)?)),
+        Const::Struct(xs) => Ok(Val::Agg(constants(xs)?)),
+        Const::Variant(k, xs) => Ok(Val::Var(k, constants(xs)?)),
+    }
+}
+
+static fn constants(xs: *const [Const]) -> Result<[Val], Error> {
+    let out: [Val] = [];
+    for x in xs {
+        out.push(constant(x)?);
+    }
+    Ok(out)
+}
+
+static fn binary(op: *const [char], a: *const Val, b: *const Val) -> Result<Val, Error> {
+    if str::eq(op, "Eq") {
+        return Ok(Val::Bool(*a == *b));
+    }
+    if str::eq(op, "Ne") {
+        return Ok(Val::Bool(*a != *b));
+    }
+    match a {
+        Val::Bool(x) => {
+            let y = b.as_bool()?;
+            if str::eq(op, "BitAnd") { return Ok(Val::Bool(x && y)); }
+            if str::eq(op, "BitOr") { return Ok(Val::Bool(x || y)); }
+            if str::eq(op, "BitXor") { return Ok(Val::Bool(x != y)); }
+            Err(malformed("an operator bool does not have"))
+        }
+        Val::Int(x) => {
+            let (x, y) = (x, b.as_int()?);
+            if str::eq(op, "Add") { return Ok(Val::Int(x + y)); }
+            if str::eq(op, "Sub") { return Ok(Val::Int(x - y)); }
+            if str::eq(op, "Mul") { return Ok(Val::Int(x * y)); }
+            if str::eq(op, "Div") { return Ok(Val::Int(x / y)); }
+            if str::eq(op, "Rem") { return Ok(Val::Int(x % y)); }
+            if str::eq(op, "Shl") { return Ok(Val::Int(x << y)); }
+            if str::eq(op, "Shr") { return Ok(Val::Int(x >> y)); }
+            if str::eq(op, "BitAnd") { return Ok(Val::Int(x & y)); }
+            if str::eq(op, "BitOr") { return Ok(Val::Int(x | y)); }
+            if str::eq(op, "BitXor") { return Ok(Val::Int(x ^ y)); }
+            if str::eq(op, "Lt") { return Ok(Val::Bool(x < y)); }
+            if str::eq(op, "Le") { return Ok(Val::Bool(x <= y)); }
+            if str::eq(op, "Gt") { return Ok(Val::Bool(x > y)); }
+            if str::eq(op, "Ge") { return Ok(Val::Bool(x >= y)); }
+            Err(malformed("an operator integers do not have"))
+        }
+        Val::Char(x) => {
+            let y = match b {
+                Val::Char(y) => y,
+                _ => { return Err(malformed("a character compared with what is not one")); }
+            };
+            if str::eq(op, "Lt") { return Ok(Val::Bool(x < y)); }
+            if str::eq(op, "Le") { return Ok(Val::Bool(x <= y)); }
+            if str::eq(op, "Gt") { return Ok(Val::Bool(x > y)); }
+            if str::eq(op, "Ge") { return Ok(Val::Bool(x >= y)); }
+            Err(malformed("an operator characters do not have"))
+        }
+        _ => Err(malformed("an operator applied to values it does not take")),
+    }
+}
+
+////////////
+// FRAMES //
+////////////
+
+/// What one circuit being run holds: the qubit each wire is, `NONE` for one
+/// not allocated, and whether its caller gave it, as a parameter's, which
+/// the circuit neither allocates nor gives back; what each bit and variable
+/// holds; its parameters' values; the circuits supplied for its slots; the
+/// qubits of each register whose length is known only as it runs; and how
+/// many 48ths of a turn one part of its conductor's turn is. A simulator
+/// numbers the qubits as it likes; `eval` reads only the bits, variables,
+/// parameters and registers' lengths.
+struct Frame { wires: [usize], given: [bool], bits: [bool], vars: [Val], params: [Val], slots: [Circuit], regs: [[usize]], scale: usize }
+
+/// The wire of a frame that is no qubit.
+let NONE: const usize = 18446744073709551615;
+
+impl Frame {
+    /// A frame for running `c`, with its parameters' values and the
+    /// circuits supplied for its slots: no wire a qubit, every bit `false`,
+    /// and every register empty.
+    fn for_circuit(c: *const Circuit, params: [Val], slots: [Circuit]) -> Frame {
+        let wires: [usize] = [];
+        let given: [bool] = [];
+        for _ in 0..c.wires {
+            wires.push(NONE);
+            given.push(false);
+        }
+        let bits: [bool] = [];
+        for _ in 0..c.bits {
+            bits.push(false);
+        }
+        let vars: [Val] = [];
+        for _ in 0..c.vars {
+            vars.push(Val::Agg([]));
+        }
+        let regs: [[usize]] = [];
+        for _ in 0..c.grown {
+            regs.push([]);
+        }
+        Frame { wires: wires, given: given, bits: bits, vars: vars, params: params, slots: slots, regs: regs, scale: (48 / c.conductor) as usize }
+    }
+}
+
+////////////////////////
+// UNDOING OPERATIONS //
+////////////////////////
+
+/// The operations that undo `ops`.
+fn __invert(ops: *const [Op], n: u32) -> Result<[Op], Error> {
+    let out: [Op] = [];
+    let i = ops.len();
+    while i > 0 {
+        i--;
+        let undo = match &ops[i] {
+            Op::Gate { gate, targets, controls } => {
+                let g = match gate {
+                    Gate::S => Gate::Sdg,
+                    Gate::Sdg => Gate::S,
+                    Gate::T => Gate::Tdg,
+                    Gate::Tdg => Gate::T,
+                    Gate::Phase(a) => Gate::Phase(negated(a, n)),
+                    Gate::GPhase(a) => Gate::GPhase(negated(a, n)),
+                    other => clone(other),
+                };
+                Op::Gate { gate: g, targets: clone(targets), controls: clone(controls) }
+            }
+            Op::Alloc { wire } => Op::Release { wire: wire },
+            Op::Release { wire } => Op::Alloc { wire: wire },
+            Op::Call { slot, args, controls, adjoint } => {
+                Op::Call { slot: slot, args: clone(args), controls: clone(controls), adjoint: !adjoint }
+            }
+            Op::Unitary { size, entries, targets, controls } => {
+                Op::Unitary { size: size, entries: dagger(entries, size as usize, n), targets: clone(targets), controls: clone(controls) }
+            }
+            // the loop over the same range, each round undoing the body of
+            // the round it mirrors: round i sets the variable to
+            // start + end − 1 − i first
+            Op::For { var, start, end, body } => {
+                let sum = Expr::Binary("Add", [clone(start), clone(end)]);
+                let one = Expr::Value(Const::Int("1", "usize"));
+                let last = Expr::Binary("Sub", [sum, one]);
+                let mirror = Expr::Binary("Sub", [last, Expr::Var(var)]);
+                let undone: [Op] = [Op::Let { var: var, value: mirror }];
+                for op in __invert(body, n)? {
+                    undone.push(op);
+                }
+                Op::For { var: var, start: clone(start), end: clone(end), body: undone }
+            }
+            Op::Let { var, value } => { return Err(Error::Unsupported); }
+            Op::Grow { reg, wire } => { return Err(Error::Unsupported); }
+            Op::Element { wire, reg, index } => { return Err(Error::Unsupported); }
+            _ => { return Err(Error::NotUnitary); }
+        };
+        out.push(undo);
+    }
+    Ok(out)
+}
+
+/// The conjugate transpose of the `size` by `size` matrix `m`, its entries
+/// in rows, each a list of the coefficients of the powers of ζ_n: the
+/// conjugate of ζ_n^k is ζ_n^(n − k).
+static fn dagger(m: *const [[string]], size: usize, n: u32) -> [[string]] {
+    let out: [[string]] = [];
+    for r in 0..size {
+        for c in 0..size {
+            let x = &m[c * size + r];
+            let conj: [string] = [];
+            for _ in 0..n {
+                conj.push("0");
+            }
+            for k in 0..x.len() {
+                let to = ((n as usize) - (k % (n as usize))) % (n as usize);
+                conj[to] = clone(&x[k]);
+            }
+            out.push(conj);
+        }
+    }
+    out
+}
+
+static fn negated(a: *const Angle, n: u32) -> Angle {
+    match a {
+        Angle::Fixed(m) => Angle::Fixed((n - (m % n)) % n),
+        Angle::Runtime(e) => Angle::Runtime(Expr::Unary("Neg", [clone(e)])),
+    }
+}
+
+/////////////
+// RUNNING //
+/////////////
+
+/// The job of running the circuit the document `doc` holds on `dev`
+/// `shots` times, with the arguments given, which are checked against what
+/// it takes, as each supplied operator is against what the circuit needs of
+/// it.
+static fn prepared(dev: *const Device, doc: *const [char], args: *const [dyn], slots: *const [*[char]], regs: *const [RegHandle], shots: u32, seed: u64?) -> Result<Job, Error> {
+    let c = __circuit_of_doc(doc)?;
+    if args.len() != c.params.len() || slots.len() != c.slots.len() || regs.len() != c.registers.len() {
+        return Err(bad("the arguments are not the parameters the circuit takes"));
+    }
+    let params: [Val] = [];
+    for a in args {
+        params.push(val_of_dyn(a)?);
+    }
+    let subs: [Circuit] = [];
+    for i in 0..slots.len() {
+        let sub = __circuit_of_doc(slots[i])?;
+        if sub.slots.len() > 0 || sub.params.len() > 0 {
+            return Err(Error::Unsupported);
+        }
+        if c.slots[i].monic && !__is_monic(&sub.body) {
+            return Err(Error::NotMonic(clone(&c.slots[i].name)));
+        }
+        for keep in &c.slots[i].keeps {
+            if !sim::__keeps_state(&sub, &c.slots[i].widths, keep.arg, &keep.state, c.conductor)? {
+                return Err(Error::NotKept(clone(&c.slots[i].name)));
+            }
+        }
+        subs.push(sub);
+    }
+    let states: [quon::State?] = [];
+    for i in 0..regs.len() {
+        let r = &regs[i];
+        if r.device != dev.id || r.width != c.registers[i] {
+            return Err(bad("a register not of the device, or not of the width the circuit takes"));
+        }
+        states.push(clone(&DEVICES[r.device].registers[r.index].state));
+    }
+    Ok(Job { circuit: c, doc: clone(doc), params: params, subs: subs, states: states, shots: shots, seed: seed })
+}
+
+/// Runs the circuit the document `doc` holds as `dev.run_opts` does: the
+/// outcome seen most often, the first seen that often on a tie.
+fn __run_value(dev: *const Device, o: *const RunOpts, doc: *const [char], args: *const [dyn], slots: *const [*[char]], regs: *const [RegHandle]) -> Result<Val, Error> {
+    let t = __run_counts(dev, o, doc, args, slots, regs)?;
+    let best = 0;
+    for i in 0..t.counts.len() {
+        if t.counts[i] > t.counts[best] {
+            best = i;
+        }
+    }
+    Ok(clone(&t.outcomes[best]))
+}
+
+/// Runs the circuit the document `doc` holds `o.shots` times, at least
+/// once, on the device's backend: each outcome, in the order first seen,
+/// with how many runs gave it.
+fn __run_counts(dev: *const Device, o: *const RunOpts, doc: *const [char], args: *const [dyn], slots: *const [*[char]], regs: *const [RegHandle]) -> Result<Tally, Error> {
+    let shots = if o.shots == 0 { 1 } else { o.shots };
+    let job = prepared(dev, doc, args, slots, regs, shots, clone(&o.seed))?;
+    let (b, h) = backend_of(dev.id);
+    let run = b.run;
+    let t = run(h, &job)?;
+    if t.outcomes.len() == 0 || t.outcomes.len() != t.counts.len() {
+        return Err(malformed("a device that gave no count for some outcome, or no outcome at all"));
+    }
+    Ok(t)
+}
+
+/// Every outcome of the circuit the document `doc` holds, with its
+/// probability, exactly, from the device's backend; `Unsupported` on a
+/// device that cannot compute it.
+fn __run_distribution(dev: *const Device, doc: *const [char], args: *const [dyn], slots: *const [*[char]], regs: *const [RegHandle]) -> Result<Spread, Error> {
+    let job = prepared(dev, doc, args, slots, regs, 1, None)?;
+    let (b, h) = backend_of(dev.id);
+    let s = match b.distribution {
+        Some(f) => f(h, &job)?,
+        None => { return Err(Error::Unsupported); }
+    };
+    if s.outcomes.len() != s.probabilities.len() {
+        return Err(malformed("a device that gave no probability for some outcome"));
+    }
+    Ok(s)
+}
+
+/// One outcome of a circuit and how many runs gave it, as `dev.sample`
+/// counts them.
+struct Count<K> { outcome: K, count: u32 }
+
+/// One outcome of a circuit and its probability, exactly, as
+/// `dev.distribution` gives it.
+struct Chance<K> { outcome: K, probability: cyclo<48> }
+
+/// What `dev.sample(c, o, args…)` is.
+fn __sample<K>(dev: *const Device, o: *const RunOpts, doc: *const [char], args: [dyn], slots: [*[char]], regs: [RegHandle]) -> Result<[Count<K>], Error> {
+    let t = __run_counts(dev, o, doc, &args, &slots, &regs)?;
+    let out: [Count<K>] = [];
+    for i in 0..t.outcomes.len() {
+        out.push(Count { outcome: __bind_kernel::<K>(&t.outcomes[i])?, count: t.counts[i] });
+    }
+    Ok(out)
+}
+
+/// What `dev.distribution(c, args…)` is.
+fn __distribution<K>(dev: *const Device, doc: *const [char], args: [dyn], slots: [*[char]], regs: [RegHandle]) -> Result<[Chance<K>], Error> {
+    let s = __run_distribution(dev, doc, &args, &slots, &regs)?;
+    let out: [Chance<K>] = [];
+    for i in 0..s.outcomes.len() {
+        out.push(Chance { outcome: __bind_kernel::<K>(&s.outcomes[i])?, probability: s.probabilities[i] });
+    }
+    Ok(out)
+}
+
+/// What a circuit gave, as its kernel's type `K`.
+fn __bind_kernel<K>(v: *const Val) -> Result<K, Error> {
+    let ti = @typeinfo(K);
+    if ti.kind == TypeKind::Void {
+        return Ok(__dyn_take(__dyn_make(ti)));
+    }
+    let t = __tcon_of(v, ti)?;
+    match tcon::bind::<K>(&t) {
+        Ok(k) => Ok(k),
+        Err(e) => Err(Error::Malformed(e.detail)),
+    }
+}
+
+////////////////
+// ESTIMATION //
+////////////////
+
+fn __estimate_all(dev: *const Device, doc: *const [char], bits: u8) -> Result<[phase<48>], Error> {
+    let c = __circuit_of_doc(doc)?;
+    let width: u32 = 0;
+    for r in &c.registers {
+        width += *r;
+    }
+    if width > 8 {
+        return Err(Error::Unsupported);
+    }
+    let out: [phase<48>] = [];
+    for s in 0..((1 as u32) << width) {
+        out.push(__estimate(dev, doc, s, bits)?);
+    }
+    Ok(out)
+}
+
+/// The estimate of the phase the circuit the document `doc` holds gives the
+/// basis state `sector`, from the device's backend, once the circuit is
+/// checked to be one each rung of the ladder can control.
+fn __estimate(dev: *const Device, doc: *const [char], sector: u32, bits: u8) -> Result<phase<48>, Error> {
+    let c = __circuit_of_doc(doc)?;
+    if bits == 0 || bits > 4 || c.params.len() > 0 || c.slots.len() > 0 || !__is_monic(&c.body) {
+        return Err(Error::Unsupported);
+    }
+    for op in &c.body {
+        match op {
+            Op::If { cond, then, els } => { return Err(Error::Unsupported); }
+            _ => {}
+        }
+    }
+    let width: u32 = 0;
+    for r in &c.registers {
+        width += *r;
+    }
+    if width < 32 && sector >= ((1 as u32) << width) {
+        return Err(bad("a sector that is not a basis state of the qubits the circuit takes"));
+    }
+    let (b, h) = backend_of(dev.id);
+    match b.estimate {
+        Some(f) => f(h, &c, sector, bits),
+        None => Err(Error::Unsupported),
+    }
+}

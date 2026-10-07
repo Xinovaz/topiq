@@ -1,0 +1,12 @@
+// expect: abort RA01 at 7
+// Signed addition past the maximum.
+#unit classical
+
+fn grow(x: i32) -> i32 {
+    let step = 1000;
+    x + step
+}
+
+fn main() -> i32 {
+    grow(2147483000)
+}

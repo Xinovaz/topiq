@@ -1,0 +1,39 @@
+// expect: exit 0
+// stdout: area 16, scale 3
+#unit classical
+import geometry;
+import geometry as g;
+
+fn print_digit(d: i64) {
+    let c = ["0123456789"[d as usize]];
+    print(&c);
+}
+
+fn print_small(n: i64) {
+    if n >= 10 { print_digit(n / 10); }
+    print_digit(n % 10);
+}
+
+fn main() -> i32 {
+    let corner = geometry::Point { x: 1, y: 2 };
+    let square = geometry::Shape::Square { corner: corner, side: 4 };
+    let dot = g::Shape::Dot(g::Point { x: 0, y: 0 });
+    let a = geometry::area(&square) + g::area(&dot) + geometry::area(&geometry::Shape::Nothing);
+    print("area ");
+    print_small(a);
+    print(", scale ");
+    print_small(geometry::SCALE);
+    print("\n");
+    if geometry::CALLS != 3 { return 1; }
+    geometry::CALLS = 0;
+    if g::CALLS != 0 { return 2; }
+    let p = geometry::moved(geometry::Point { x: 10, y: 20 }, 5);
+    if p.x != 15 || p.y != 25 { return 3; }
+    // A type reached through two names is one type.
+    let q: g::Point = p;
+    match square {
+        g::Shape::Square { side } => if side != 4 { return 4; },
+        _ => { return 5; }
+    }
+    (q.x - 15) as i32
+}

@@ -1,0 +1,27 @@
+// expect: clean
+// H.4, a coherently queried table, as printed, with the entries it names
+// but does not define (Issues item 171) and an assertion of its sector
+// phases.
+#unit quantum
+import gates;
+import judge;
+
+qmap Phases: [qubit; 2] -> fn(*[qubit; 1]) {
+    0: id1, 1: id1, 2: id1, 3: neg1,
+}
+
+[expect: sector]
+fn mark(key: *[qubit; 2], t: *[qubit; 1]) { query Phases[key](t); }
+
+// The identity, and minus it: each stationary.
+fn id1(t: *[qubit; 1]) { }
+fn neg1(t: *[qubit; 1]) { gphase(phase::<8>::of(4)); }
+
+@static_assert(
+    match @judgment(mark).contract {
+        judge::ContractClass::Sector(p) => p.len() == 4 && p[0] == phase::<48>::of(0)
+            && p[1] == phase::<48>::of(0) && p[2] == phase::<48>::of(0) && p[3] == phase::<48>::of(24),
+        _ => false,
+    },
+    "the sector phases are (0, 0, 0, pi)"
+);

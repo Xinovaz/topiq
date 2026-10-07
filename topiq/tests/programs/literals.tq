@@ -1,0 +1,18 @@
+// expect: exit 3
+// Literals take their type from context, the extremes of each type are
+// writable, and conversions that fit succeed.
+#unit classical
+
+fn low() -> i8 { -128 }
+
+fn high() -> u64 { 18446744073709551615 }
+
+fn floor() -> i64 { -9223372036854775808 }
+
+fn main() -> i32 {
+    let score = 0;
+    if low() as i32 == -128 { score += 1; }
+    if high() == 0xFFFF_FFFF_FFFF_FFFF { score += 1; }
+    if floor() < 0 && (floor() + 1) / 2 == -4611686018427387903 { score += 1; }
+    score
+}

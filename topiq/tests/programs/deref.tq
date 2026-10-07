@@ -1,0 +1,81 @@
+// expect: exit 0
+// stdout: *&x == x
+// stdout: &*p == p
+// stdout: (**)(&&)x == x
+// stdout: 42 7
+// stdout: 2 swapped 1
+#unit classical
+
+// Prints a number one digit at a time, each as a one-character array.
+fn print_u64(n: u64) {
+    if n >= 10 { print_u64(n / 10); }
+    let digit = ["0123456789"[(n % 10) as usize]];
+    print(&digit);
+}
+
+fn check(ok: bool, what: *[char]) {
+    if !ok { panic(what); }
+    print(what);
+    print("\n");
+}
+
+// Writes through a reference to a reference.
+fn set_twice_removed(pp: **u64, v: u64) {
+    **pp = v;
+}
+
+fn swap(a: *u64, b: *u64) {
+    let t = *a;
+    *a = *b;
+    *b = t;
+}
+
+struct Counter { n: u64 }
+
+fn bump(c: *Counter) {
+    (*c).n += 1;
+    c.n += 1;
+}
+
+fn main() -> i32 {
+    let x: u64 = 5;
+    check(*&x == x, "*&x == x");
+
+    let p = &x;
+    check(&*p == p, "&*p == p");
+
+    check((**)(&&)x == x, "(**)(&&)x == x");
+
+    // Two references to one place are equal; references to two places that
+    // hold the same value are not.
+    let y: u64 = 5;
+    if &x == &y { return 1; }
+    if !(p == &x) { return 2; }
+
+    let target: u64 = 0;
+    (**)(&&target) = 40;
+    let r = &target;
+    set_twice_removed(&r, *r + 2);
+
+    let c = Counter { n: 5 };
+    bump(&c);
+    print_u64(target);
+    print(" ");
+    print_u64(c.n);
+    print("\n");
+
+    let a: u64 = 1;
+    let b: u64 = 2;
+    swap(&a, &b);
+    print_u64(a);
+    print(" swapped ");
+    print_u64(b);
+    print("\n");
+
+    // A slice compares by its address and its length.
+    let arr = [1u8, 2, 3];
+    let s: *[u8] = &arr;
+    let t: *[u8] = &arr;
+    if s != t { return 3; }
+    0
+}

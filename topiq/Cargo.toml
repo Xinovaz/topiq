@@ -1,0 +1,65 @@
+[package]
+name = "topiq"
+version = "0.1.0"
+edition = "2024"
+description = "The Topiq language: a reference frontend and compiler toolchain"
+license = "MIT"
+
+[lib]
+name = "topiq"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tqc"
+path = "src/bin/tqc/main.rs"
+
+[dependencies]
+# Frontend: parsing and diagnostic rendering.
+ariadne = "0.6.0"
+# `pratt` is not a default feature; the expression parser needs it.
+# `stacker` (default) keeps the recursive parser off the 1 MiB Windows main stack.
+chumsky = { version = "0.13.0", features = ["pratt"] }
+# Grows the stack where analysis recurses as deeply as a program asks, such as
+# a constant function calling itself up to the recursion limit.
+stacker = "0.1"
+
+# Backend: LLVM. The local LLVM build is X86-only, so the default `target-all`
+# feature must be off or ~88 `LLVMInitialize*` symbols fail to resolve at link.
+inkwell = { version = "0.9.0", default-features = false, features = ["llvm22-1", "target-x86"], optional = true }
+
+# Exact scalar arithmetic: frac, cyclo<N> and phase<N> must be exact at
+# arbitrary precision, so the whole kernel is built on bignums.
+num-bigint = "0.4"
+num-integer = "0.1"
+num-rational = "0.4"
+num-traits = "0.2"
+
+# The `tqc` driver.
+clap = { version = "4.6", features = ["derive"] }
+
+# Reading the metadata section back out of a compiled unit's object file. Pure
+# Rust, so a unit can be checked against another's `.tcu` without LLVM.
+object = { version = "0.39", default-features = false, features = ["read_core", "coff", "elf", "std"] }
+
+# `tqc doc`: the site's pages are templates filled from serialised views, and
+# documentation is Markdown. `multi_template` lets the pages share a layout;
+# `html` is pulldown-cmark's renderer.
+minijinja = { version = "2.24", default-features = false, features = ["builtins", "macros", "multi_template", "serde"] }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+serde = { version = "1", features = ["derive"] }
+
+# Linking on Windows: finds the MSVC linker and the library paths it needs.
+# Never resolve `link.exe` from PATH: Git for Windows puts its own, unrelated
+# `link.exe` there.
+[target.'cfg(windows)'.dependencies]
+find-msvc-tools = { version = "0.1.9", optional = true }
+
+[features]
+# LLVM is on by default, but can be switched off so the frontend still builds
+# and tests when the LLVM prefix is unavailable.
+default = ["llvm"]
+llvm = ["dep:inkwell", "dep:find-msvc-tools"]
+
+[dev-dependencies]
+insta = "1.48"
+tempfile = "3.27"

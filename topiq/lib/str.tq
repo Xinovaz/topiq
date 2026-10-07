@@ -1,0 +1,140 @@
+//! The `str` library: working with text. `core`'s `string` owns its
+//! characters. A `char` is one Unicode scalar value, so the length of a text
+//! is how many characters it has, and indexing it reaches whole characters.
+//!
+//! Each function reads text as a `*const [char]`: a string literal, a slice,
+//! or a `string` `s` passed as `&s`, which lends its characters without a
+//! copy. Text a function makes is a `string`.
+
+#unit classical
+
+/// Whether `a` and `b` are the same characters: what `==` asks of two
+/// `string`s.
+fn eq(a: *const [char], b: *const [char]) -> bool {
+    __text_eq(a, b)
+}
+
+/// How `a` and `b` compare, character by character by scalar value, a text
+/// coming before every longer one that starts with it: the comparison `<`
+/// and the other orderings make of two `string`s.
+fn cmp(a: *const [char], b: *const [char]) -> Ord {
+    __text_cmp(a, b)
+}
+
+/// How many characters `s` has.
+fn len(s: *const [char]) -> usize {
+    s.len()
+}
+
+/// The pieces of `s` between occurrences of `sep`, in order. Two occurrences
+/// side by side have an empty piece between them. An empty `sep` splits
+/// nothing: the whole of `s` is the one piece.
+fn split(s: *const [char], sep: *const [char]) -> [string] {
+    let pieces: [string] = [];
+    let piece: string = "";
+    let i = 0;
+    while i < s.len() {
+        if sep.len() > 0 && starts_at(s, i, sep) {
+            pieces.push(piece);
+            piece = "";
+            i += sep.len();
+        } else {
+            piece.chars.push(s[i++]);
+        }
+    }
+    pieces.push(piece);
+    pieces
+}
+
+/// The texts of `parts`.
+fn join(parts: *const [string], sep: *const [char]) -> string {
+    let out: string = "";
+    for i in 0..parts.len() {
+        if i > 0 {
+            out += sep;
+        }
+        out += parts[i];
+    }
+    out
+}
+
+/// `s` read as a `T`, as a TCON document is: `"42"` as an `i64`, `"1.5"` as
+/// an `f64`, `"true"` as a `bool`. `None` when it is not one.
+fn parse<T>(s: *const [char]) -> T? {
+    tcon::parse::<T>(s).ok()
+}
+
+/// The text UTF-8 `bytes` encode, or `None` if they are not UTF-8: a byte
+/// that cannot start a character, a character cut short, one encoded in more
+/// bytes than it needs, a surrogate, or a value beyond `0x10FFFF`.
+fn from_utf8(bytes: *const [u8]) -> string? {
+    let out: string = "";
+    let i = 0;
+    while i < bytes.len() {
+        let b = bytes[i] as u32;
+        let (n, first, least) = if b < 128 {
+            (1, b, 0)
+        } else if b >= 194 && b < 224 {
+            (2, b - 192, 128)
+        } else if b >= 224 && b < 240 {
+            (3, b - 224, 2048)
+        } else if b >= 240 && b < 245 {
+            (4, b - 240, 65536)
+        } else {
+            return None;
+        };
+        if i + n > bytes.len() {
+            return None;
+        }
+        let c = first;
+        for k in 1..n {
+            let more = bytes[i + k] as u32;
+            if more < 128 || more >= 192 {
+                return None;
+            }
+            c = c * 64 + (more - 128);
+        }
+        if c < least || c > 1114111 || (c >= 55296 && c <= 57343) {
+            return None;
+        }
+        out.chars.push(c as char);
+        i += n;
+    }
+    Some(out)
+}
+
+/// `s` encoded as UTF-8.
+fn to_utf8(s: *const [char]) -> [u8] {
+    let out: [u8] = [];
+    for ch in s {
+        let c = (*ch) as u32;
+        if c < 128 {
+            out.push(c as u8);
+        } else if c < 2048 {
+            out.push((192 + c / 64) as u8);
+            out.push((128 + c % 64) as u8);
+        } else if c < 65536 {
+            out.push((224 + c / 4096) as u8);
+            out.push((128 + (c / 64) % 64) as u8);
+            out.push((128 + c % 64) as u8);
+        } else {
+            out.push((240 + c / 262144) as u8);
+            out.push((128 + (c / 4096) % 64) as u8);
+            out.push((128 + (c / 64) % 64) as u8);
+            out.push((128 + c % 64) as u8);
+        }
+    }
+    out
+}
+
+static fn starts_at(s: *const [char], at: usize, sep: *const [char]) -> bool {
+    if at + sep.len() > s.len() {
+        return false;
+    }
+    for k in 0..sep.len() {
+        if s[at + k] != sep[k] {
+            return false;
+        }
+    }
+    true
+}

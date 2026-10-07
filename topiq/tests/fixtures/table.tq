@@ -1,0 +1,9 @@
+// A table queried coherently, without collapsing the key.
+#unit quantum
+
+qmap Phases: [qubit; 2] -> fn(*[qubit; 1]) {
+    0: id1, 1: id1, 2: id1, 3: neg1,
+}
+
+[expect: sector]
+fn mark(key: *[qubit; 2], t: *[qubit; 1]) { query Phases[key](t); }

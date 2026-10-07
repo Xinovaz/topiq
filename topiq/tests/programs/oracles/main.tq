@@ -1,0 +1,35 @@
+// expect: exit 0
+// stdout: deutsch Constant Constant Balanced Balanced
+// stdout: deutsch-jozsa Constant Balanced
+// stdout: bernstein-vazirani 101
+// The library's Deutsch algorithm with the four oracles of `gates`, and
+// Deutsch-Jozsa and Bernstein-Vazirani with oracles of this program's.
+#unit classical
+import circs;
+import algo;
+import gates;
+import qpu;
+
+fn show(g: algo::Guess) {
+    print(" ");
+    print(&tcon::emit(&g));
+}
+
+fn main() -> i32 {
+    let dev = qpu::connect("sim://exact").unwrap();
+    print("deutsch");
+    show(dev.run(algo::deutsch, gates::ORACLE_I).unwrap());
+    show(dev.run(algo::deutsch, gates::ORACLE_NEGI).unwrap());
+    show(dev.run(algo::deutsch, gates::ORACLE_Z).unwrap());
+    show(dev.run(algo::deutsch, gates::ORACLE_NEGZ).unwrap());
+    print("\ndeutsch-jozsa");
+    show(dev.run(circs::dj, circs::always).unwrap());
+    show(dev.run(circs::dj, circs::second_bit).unwrap());
+    print("\nbernstein-vazirani ");
+    let s = dev.run(circs::bv, circs::parity101).unwrap();
+    for i in 0..3 {
+        if s[i] { print("1"); } else { print("0"); }
+    }
+    print("\n");
+    0
+}

@@ -1,0 +1,72 @@
+// expect: exit 0
+// stdout: [[2, 1], [4, 3]] | [[1, 3], [4, 4]] | [3, 7] | [[3, 6], [9, 12]] | [2, 2] | [[1, 3], [2, 4]] | -2 | 5 | .
+// stdout: [[0, 1, 0, 2], [1, 0, 2, 0], [0, 3, 0, 4], [3, 0, 4, 0]] | [[1, 0], [0, 1]] | -1 | [[1, 0], [0, 1]] | 2 | .
+// stdout: 3 | [[0, 0, 0], [0, 0, 0]] | 0 | 1 | 1 | .
+// stdout: 3 | [[1, 2], [1, 2]] | [7, 10] | [[1, 3], [2, 4]] | [1, 1] | 2 | [1, 2, 2, 4] | .
+// Vectors, covectors and matrices: element-wise sums, products of matrices,
+// vectors, covectors and numbers, adjoints, the Kronecker product, and exact
+// determinants and inverses. An array of exact numbers written with no type
+// is a vector or matrix.
+#unit classical
+
+fn say<T, R: const usize, C: const usize>(m: *mat<T, R, C>) {
+    print(&tcon::emit(&m.e));
+    print(" | ");
+}
+
+fn show<T>(x: *T) {
+    print(&tcon::emit(x));
+    print(" | ");
+}
+
+fn main() -> i32 {
+    let a: mat<i64, 2, 2> = [[1, 2], [3, 4]];
+    let b: square<i64, 2> = [[0, 1], [1, 0]];
+    say(&(a * b));
+    say(&(a + b));
+    let v: vec<i64, 2> = [1, 1];
+    show(&(a * v).e);
+    say(&(a * 3));
+    show(&(2 * v).e);
+    say(&a.transpose());
+    show(&a.det());
+    show(&a.trace());
+    print(".\n");
+
+    say(&(a ** b));
+    let h = [[isq2, isq2], [isq2, -isq2]];
+    say(&(h * h));
+    show(&h.det());
+    let f: mat<frac, 2, 2> = [[1, 2], [3, 4]];
+    match f.inverse() {
+        Some(g) => say(&(f * g)),
+        None => print("singular"),
+    }
+    let u: vec<cyclo<8>, 2> = [1, i];
+    show(&u.norm2());
+    print(".\n");
+
+    show(&la::identity::<frac, 3>().trace());
+    say(&la::zeros::<i64, 2, 3>());
+    show(&la::kron(&b, &b).trace());
+    let p: vec<cyclo<8>, 2> = [1, 0];
+    let q: vec<cyclo<8>, 2> = [isq2, isq2];
+    let r: vec<cyclo<8>, 2> = [isq2, isq2 * i];
+    match la::bargmann(&p, &q, &r) {
+        Some(ph) => show(&ph.index()),
+        None => print("none"),
+    }
+    show(&la::identity::<i64, 2>().det());
+    print(".\n");
+
+    let c: covec<i64, 2> = [1, 2];
+    show(&(c * v));
+    say(&(v * c));
+    show(&(c * a).e);
+    say(&adjoint(a));
+    show(&adjoint(v).e);
+    show(&(adjoint(u) * u));
+    show(&(c ** c).e);
+    print(".\n");
+    0
+}

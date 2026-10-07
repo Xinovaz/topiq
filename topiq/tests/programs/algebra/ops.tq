@@ -1,0 +1,95 @@
+// Operators a classical program composes while it runs.
+#unit quantum
+import gates;
+
+[entry]
+fn flip(q: *qubit) { x(q); }
+
+[entry]
+fn quarter(q: *qubit) { s(q); }
+
+// T on the first qubit and Z on the second: stationary on each basis state.
+[entry]
+fn phases(a: *qubit, b: *qubit) { t(a); z(b); }
+
+// Measures what it is given.
+[entry]
+fn look(q: *qubit) -> bool {
+    let r: [qubit; 1] = prep |0>;
+    cx(q, &r[0]);
+    let m = measure r;
+    m[0]
+}
+
+// Applies the operator supplied, its adjoint, then it again.
+[entry]
+fn there_and_back(f: fn(*qubit)) -> bool {
+    let q: [qubit; 1] = prep |0>;
+    f(&q[0]);
+    adjoint(f)(&q[0]);
+    f(&q[0]);
+    let m = measure q;
+    m[0]
+}
+
+// Applies a controlled operator with its control |1>, then |0>.
+[entry]
+fn under(g: fn(*qubit, *qubit)) -> (bool, bool) {
+    let q: [qubit; 2] = prep |10>;
+    g(&q[0], &q[1]);
+    let r: [qubit; 2] = prep |00>;
+    g(&r[0], &r[1]);
+    let m = measure q;
+    let n = measure r;
+    (m[1], n[1])
+}
+
+// `S·H` as a matrix, applied `n` times, a count known as the circuit runs.
+fn turn(r: *[qubit; 1], n: u32) {
+    for k in 0..n {
+        let u: mat<cyclo<8>, 2, 2> = [[isq2, isq2], [i * isq2, -i * isq2]];
+        apply(u, r);
+    }
+}
+
+[entry]
+fn spin(r: *[qubit; 1], n: u32) -> bool {
+    turn(r, n);
+    false
+}
+
+// Whether the qubit given is |1>, read through an ancilla.
+[entry]
+fn peek(r: *[qubit; 1], n: u32) -> bool {
+    let t: [qubit; 1] = prep |0>;
+    cx(&r[0], &t[0]);
+    let m = measure t;
+    m[0]
+}
+
+// X written as outer products, |0><1| + |1><0|, which takes |0> to |1>;
+// and the matrix of `turn` followed by its adjoint, which leaves |0>.
+[entry]
+fn kets() -> (bool, bool) {
+    let k0: vec<cyclo<8>, 2> = [1, 0];
+    let k1: vec<cyclo<8>, 2> = [0, 1];
+    let q: [qubit; 1] = prep |0>;
+    apply(k0 * adjoint(k1) + k1 * adjoint(k0), &q);
+    let r: [qubit; 1] = prep |0>;
+    let u: mat<cyclo<8>, 2, 2> = [[isq2, isq2], [i * isq2, -i * isq2]];
+    apply(u, &r);
+    apply(adjoint(u), &r);
+    let m = measure q;
+    let n = measure r;
+    (m[0], n[0])
+}
+
+// The turns, and the turns undone, here.
+[entry]
+fn round_trip(n: u32) -> bool {
+    let q: [qubit; 1] = prep |0>;
+    turn(&q, n);
+    adjoint(turn)(&q, n);
+    let m = measure q;
+    m[0]
+}

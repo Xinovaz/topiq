@@ -1,0 +1,11 @@
+// A hybrid Deutsch program: the classical half.
+#unit classical
+import deutsch;
+import qpu;
+
+fn main() -> i32 {
+    let dev = qpu::connect("sim://exact").unwrap();
+    let g = dev.run(deutsch::deutsch, deutsch::ORACLE_Z).unwrap();
+    print(&tcon::emit(&g));
+    0
+}

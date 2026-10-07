@@ -1,0 +1,16 @@
+// The other half.
+#unit classical
+import even;
+
+struct Forest { trees: i64 }
+struct Pair<T> { a: T, b: T }
+
+let BASE: const i64 = 10;
+
+fn is_odd(n: i64) -> bool {
+    if n == 0 { false } else { even::is_even(n - 1) }
+}
+
+fn weight(t: *even::Tree) -> i64 { t.size * even::STEP + t.forest.trees }
+
+fn forests() -> Pair<Forest> { even::pair(Forest { trees: 1 }, Forest { trees: 2 }) }

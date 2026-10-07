@@ -1,0 +1,44 @@
+// Teleportation, superdense coding and the swap test of the `algo` library.
+#unit quantum
+import gates;
+import algo;
+
+// |1> teleported reads 1, and (|0> + i|1>)/√2 teleported is turned back to
+// |0> by `sdag` and `h`, so it reads 0.
+[entry]
+fn teleport_one(n: u32) -> bool {
+    let src: [qubit; 1] = prep |1>;
+    let dst = algo::teleport(src);
+    let m = measure dst;
+    m[0]
+}
+
+[entry]
+fn teleport_turned(n: u32) -> bool {
+    let src: [qubit; 1] = prep isq2 * |0> + i * isq2 * |1>;
+    let dst = algo::teleport(src);
+    sdag(&dst[0]);
+    h(&dst[0]);
+    let m = measure dst;
+    m[0]
+}
+
+// Two bits written into one half of a Bell pair and read from both.
+[entry]
+fn superdense(b0: bool, b1: bool) -> (bool, bool) {
+    let r: [qubit; 2];
+    algo::bell(&r[0], &r[1]);
+    algo::superdense_encode(b0, b1, &r[0]);
+    algo::superdense_decode(r)
+}
+
+// Two registers in the same state never fail the swap test.
+[entry]
+fn same(n: u32) -> bool {
+    let a: [qubit; 2] = prep isq2 * |00> + isq2 * |11>;
+    let b: [qubit; 2] = prep isq2 * |00> + isq2 * |11>;
+    let differ = algo::swap_test(&a, &b);
+    forget a;
+    forget b;
+    differ
+}

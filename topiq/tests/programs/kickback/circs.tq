@@ -1,0 +1,29 @@
+// A phase kicked back through an operator supplied when the circuit runs.
+#unit quantum
+import gates;
+
+// An oracle marking |1>, by flipping its target: on |−> that is a phase.
+[entry]
+fn mark(q: *qubit, t: *qubit) { cx(q, t); }
+
+// An operator that does not leave its target as it finds it.
+[entry]
+fn spoil(q: *qubit, t: *qubit) { h(t); }
+
+// The query qubit's phase, turned into a bit: the ancilla, in |−>, is
+// given back in |0> only if the oracle leaves it in |−>.
+[entry]
+fn kick(f: fn(*qubit, *qubit), n: u32) -> bool {
+    let q: [qubit; 1] = prep isq2 * |0> + isq2 * |1>;
+    {
+        aux let a: qubit;
+        x(&a);
+        h(&a);
+        f(&q[0], &a);
+        h(&a);
+        x(&a);
+    }
+    h(&q[0]);
+    let m = measure q;
+    m[0]
+}

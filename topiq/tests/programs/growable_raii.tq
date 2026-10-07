@@ -1,0 +1,54 @@
+// expect: exit 0
+// stdout: 3.2.1.|7.6.|got 5 5.|4.|saw 8.9.11.10.|12.14.|end|17.16.15.13.
+#unit classical
+
+fn show(n: i64) {
+    if n >= 10 { show(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+struct Noisy { id: i64 }
+
+impl Noisy {
+    fn $drop(self: *Noisy) { show(self.id); print("."); }
+}
+
+fn keep_odd(n: *Noisy) -> bool { n.id % 2 == 1 }
+
+// Every element is destroyed exactly once: with its array, last first; when
+// `truncate`, `clear` or `filter` lets it go; or where it was moved to.
+fn run() {
+    {
+        let xs: [Noisy] = [];
+        xs.push(Noisy { id: 1 });
+        xs.push(Noisy { id: 2 });
+        xs.push(Noisy { id: 3 });
+    }
+    print("|");
+    let ys: [Noisy] = [Noisy { id: 4 }, Noisy { id: 5 }, Noisy { id: 6 }, Noisy { id: 7 }];
+    ys.truncate(2);
+    print("|");
+    match ys.pop() { Some(n) => { print("got "); show(n.id); print(" "); }, None => {} }
+    print("|");
+    ys.clear();
+    print("|");
+    let zs: [Noisy] = [Noisy { id: 8 }, Noisy { id: 9 }, Noisy { id: 10 }, Noisy { id: 11 }];
+    // Leaving early destroys the elements not reached.
+    for z in zs {
+        if z.id == 9 { break; }
+        print("saw ");
+    }
+    print("|");
+    let ws: [Noisy] = [Noisy { id: 12 }, Noisy { id: 13 }, Noisy { id: 14 }];
+    let odd = ws.filter(&keep_odd);
+    print("|");
+    let nested: [[Noisy]] = [[Noisy { id: 15 }], [Noisy { id: 16 }, Noisy { id: 17 }]];
+    print("end|");
+}
+
+fn main() -> i32 {
+    run();
+    print("\n");
+    0
+}

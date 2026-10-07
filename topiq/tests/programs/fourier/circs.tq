@@ -1,0 +1,64 @@
+// The Fourier transform, phase estimation and Fourier addition of the
+// `algo` library.
+#unit quantum
+import gates;
+import algo;
+
+// The transform and its inverse give back what they were given: exactly on
+// three qubits, and on five, where the transform leaves out its finest
+// rotations, because the inverse leaves out the same ones.
+[entry]
+fn round_trip(n: u32) -> [bool; 3] {
+    let r: [qubit; 3] = prep |101>;
+    algo::qft(&r);
+    algo::iqft(&r);
+    measure r
+}
+
+[entry]
+fn wide_round_trip(n: u32) -> [bool; 5] {
+    let r: [qubit; 5] = prep |10110>;
+    algo::qft(&r);
+    algo::iqft(&r);
+    measure r
+}
+
+// |1> is an eigenstate of `t`, with phase an eighth of a turn, and of `s`,
+// with a quarter: three bits read 001 and 010.
+fn t_gate(e: *[qubit; 1]) { t(&e[0]); }
+fn s_gate(e: *[qubit; 1]) { s(&e[0]); }
+
+[entry]
+fn t_phase(n: u32) -> [bool; 3] {
+    let e: [qubit; 1] = prep |1>;
+    let m = algo::estimate_phase::<3, 1>(t_gate, &e);
+    forget e;
+    m
+}
+
+[entry]
+fn s_phase(n: u32) -> [bool; 3] {
+    let e: [qubit; 1] = prep |1>;
+    let m = algo::estimate_phase::<3, 1>(s_gate, &e);
+    forget e;
+    m
+}
+
+// How many of the 16 sums of two 2-bit numbers Fourier addition gets right,
+// with the second operand left as it was.
+[entry]
+fn draper_sums(n: u32) -> u32 {
+    let ok: u32 = 0;
+    for a in 0..4u64 {
+        for b in 0..4u64 {
+            let x: quint<2> = a;
+            let y: quint<2> = b;
+            let x = algo::draper_add(x, &y);
+            let s = measure x;
+            let t = measure y;
+            let hit: u32 = if s as u64 == (a + b) % 4 && t as u64 == b { 1 } else { 0 };
+            ok = ok + hit;
+        }
+    }
+    ok
+}

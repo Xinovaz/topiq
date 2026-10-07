@@ -1,0 +1,32 @@
+// expect: exit 0
+// stdout: bell 00 01 10 11
+// stdout: ghz agree agree agree agree
+// stdout: w 1 1 1 1
+// The Bell, GHZ and W states of `algo`, each run several times.
+#unit classical
+import circs;
+import qpu;
+
+fn bit(b: bool) { if b { print("1"); } else { print("0"); } }
+
+fn main() -> i32 {
+    let dev = qpu::connect("sim://exact").unwrap();
+    print("bell");
+    for k in 0..4 {
+        let (z, x) = dev.run(circs::bell_round_trip, k >= 2, k % 2 == 1).unwrap();
+        print(" ");
+        bit(z);
+        bit(x);
+    }
+    print("\nghz");
+    for _ in 0..4 {
+        if dev.run(circs::ghz_agrees, 0).unwrap() { print(" agree"); } else { print(" differ"); }
+    }
+    print("\nw");
+    for _ in 0..4 {
+        print(" ");
+        print(&tcon::emit(&dev.run(circs::w_ones, 0).unwrap()));
+    }
+    print("\n");
+    0
+}

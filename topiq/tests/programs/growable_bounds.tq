@@ -1,0 +1,8 @@
+// expect: abort RA06 at 7
+#unit classical
+
+fn main() -> i32 {
+    let xs: [i32] = [1, 2];
+    xs.push(3);
+    xs[3]
+}

@@ -1,0 +1,85 @@
+// expect: exit 0
+// stdout: 12 6 15 10 2 22 4
+#unit classical
+
+fn print_small(n: i64) {
+    if n >= 10 { print_small(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+fn half(n: i64) -> i64? { if n % 2 == 0 { Some(n / 2) } else { None } }
+
+// `?` returns early with the `None`.
+fn quarter(n: i64) -> i64? { Some(half(half(n)?)?) }
+
+fn parse_digit(c: char) -> Result<i64, char> {
+    if c >= '0' && c <= '9' { Ok((c as u32 - '0' as u32) as i64) } else { Err(c) }
+}
+
+fn sum_digits(s: *[char]) -> Result<i64, char> {
+    let total = 0;
+    for c in s { total += parse_digit(*c)?; }
+    Ok(total)
+}
+
+struct Version { major: i64, minor: i64 }
+
+impl Version {
+    fn $ord(self: *Version, o: *Version) -> Ord {
+        if self.major != o.major {
+            if self.major < o.major { Ord::Lt } else { Ord::Gt }
+        } else if self.minor < o.minor { Ord::Lt } else if self.minor > o.minor { Ord::Gt } else { Ord::Eq }
+    }
+}
+
+// An iterator of its own: counts down to zero.
+struct Countdown { n: i64 }
+
+impl Countdown {
+    fn $next(self: *Countdown) -> i64? {
+        if self.n == 0 { return None; }
+        self.n -= 1;
+        Some(self.n + 1)
+    }
+}
+
+fn main() -> i32 {
+    print_small(quarter(48).unwrap_or(0));
+    print(" ");
+    let r = 1..=3;
+    let total = 0;
+    for i in r { total += i; }
+    print_small(total);
+    print(" ");
+    match sum_digits("12345") {
+        Ok(n) => print_small(n),
+        Err(_) => { return 1; }
+    }
+    print(" ");
+    if sum_digits("1x3").is_ok() { return 2; }
+
+    let xs = [1, 2, 3, 4];
+    let s = 0;
+    for x in xs { s += x; }
+    print_small(s);
+    print(" ");
+    let pairs = [(1, 2), (3, 4)];
+    let firsts = 0;
+    for (a, _) in &pairs { firsts += a; }
+    print_small(firsts + quarter(6).unwrap_or(-1) + 3 - 4);
+    print(" ");
+
+    let a = Version { major: 1, minor: 4 };
+    let b = Version { major: 1, minor: 10 };
+    if !(a < b) || a >= b || b <= a || !(b > a) { return 3; }
+
+    let c = 0;
+    for k in (Countdown { n: 6 }) { c += k; }
+    print_small(c + 1);
+    print(" ");
+    let small = 0..10;
+    print_small(if small.contains(4) && !small.contains(10) { 4 } else { 0 });
+    print("\n");
+    0
+}

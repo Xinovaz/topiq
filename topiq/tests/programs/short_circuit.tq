@@ -1,0 +1,15 @@
+// expect: exit 7
+// `&&` and `||` skip their right operand when the left decides, so a call
+// that would abort is never made.
+#unit classical
+
+fn boom() -> bool {
+    let zero = 0;
+    1 / zero == 1
+}
+
+fn main() -> i32 {
+    let a = false && boom();
+    let b = true || boom();
+    if !a && b { 7 } else { 1 }
+}

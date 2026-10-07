@@ -1,0 +1,10 @@
+// expect: exit 0
+// `MIN % -1` is 0, the true remainder, even though the machine instruction for
+// it would fault.
+#unit classical
+
+fn rem(a: i32, b: i32) -> i32 { a % b }
+
+fn main() -> i32 {
+    rem(-2147483648, -1)
+}

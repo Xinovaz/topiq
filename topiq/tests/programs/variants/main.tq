@@ -1,0 +1,29 @@
+// expect: exit 0
+// stdout: true 200 -3 true true false true 42
+// Quantum enumerations with classical fields, and structures measured whole.
+#unit classical
+import circs;
+import qpu;
+
+fn main() -> i32 {
+    let (b, k) = circs::counted(200);
+    print(&tcon::emit(&b));
+    print(" ");
+    print(&tcon::emit(&k));
+    print(" ");
+    let (v, f) = circs::signed(0);
+    print(&tcon::emit(&v));
+    print(" ");
+    print(&tcon::emit(&f));
+    print(" ");
+    let (a, r0, r1, c) = circs::pair(0);
+    print(&tcon::emit(&a));
+    print(" ");
+    print(&tcon::emit(&r0));
+    print(" ");
+    print(&tcon::emit(&r1));
+    print(" ");
+    print(&tcon::emit(&c));
+    print("\n");
+    0
+}

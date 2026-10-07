@@ -1,0 +1,31 @@
+// expect: exit 0
+// stdout: qft 101 10110
+// stdout: phase 001 010
+// stdout: draper 16
+// The quantum Fourier transform undone, the phases of `t` and `s` read by
+// phase estimation, and Fourier addition checked over every pair.
+#unit classical
+import circs;
+import qpu;
+
+fn bits(b: *const [bool]) {
+    for x in b {
+        if *x { print("1"); } else { print("0"); }
+    }
+}
+
+fn main() -> i32 {
+    let dev = qpu::connect("sim://exact").unwrap();
+    print("qft ");
+    bits(&dev.run(circs::round_trip, 0).unwrap());
+    print(" ");
+    bits(&dev.run(circs::wide_round_trip, 0).unwrap());
+    print("\nphase ");
+    bits(&dev.run(circs::t_phase, 0).unwrap());
+    print(" ");
+    bits(&dev.run(circs::s_phase, 0).unwrap());
+    print("\ndraper ");
+    print(&tcon::emit(&dev.run(circs::draper_sums, 0).unwrap()));
+    print("\n");
+    0
+}

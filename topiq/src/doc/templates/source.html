@@ -1,0 +1,7 @@
+{% extends "layout.html" %}
+{% block title %}Source of {{ page.unit }} | {{ project }}{% endblock %}
+{% block content %}
+<h1 class="title">Source of <span class="name"><a href="{{ root }}{{ sidebar.href }}">{{ page.unit }}</a></span></h1>
+<p class="path"><code>{{ page.path }}</code></p>
+<div class="source"><pre class="gutter">{{ page.gutter|safe }}</pre><pre class="code">{{ page.code|safe }}</pre></div>
+{% endblock %}

@@ -1,0 +1,11 @@
+// expect: abort RA01 at 6
+// Negating a non-zero unsigned value, which has no result of its type.
+#unit classical
+
+fn flip(x: u16) -> u16 {
+    -x
+}
+
+fn main() -> i32 {
+    flip(5) as i32
+}

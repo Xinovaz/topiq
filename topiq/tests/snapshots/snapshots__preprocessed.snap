@@ -1,0 +1,9 @@
+---
+source: tests/snapshots.rs
+expression: "format!(\"conductor {}\\nfragment {:?}\\nqalloc {:?}\\n\\n{text}\", pp.conductor,\npp.fragment, pp.qalloc)"
+---
+conductor 24
+fragment Finite
+qalloc Reuse
+
+import gates ; cover B2 = fin { | 00 > , | 11 > } ; gauge GB = fid ( ( | 00 > + | 11 > ) * isq2 ) ; base Bell = [ qubit ; 2 ] , B2 , GB ; enum Guess { Constant , Balanced } [ entry ] [ cover : B2 ] [ gauge : GB ] [ expect : monic ; contract = flat ] fn bell ( r : * [ qubit ; 2 ] ) -> Guess { let q : [ qubit ; 2 ] = prep | 00 > ; aux let a : qubit ; h ( & q [ 0 ] ) ; for i in 0 .. 2 { cx ( & q [ 0 ] , & q [ 1 ] ) ; } let bits = measure q ; if bits [ 0 ] && ! bits [ 1 ] { Guess :: Balanced } else { Guess :: Constant } } chain Loop = bell : Bell -> Bell ;

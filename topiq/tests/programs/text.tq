@@ -1,0 +1,57 @@
+// expect: exit 0
+// stdout: true false Lt Gt Eq / a|b||c / a, b, c / 42 1.5 true none / 7 ñ€𝄞 ok bad / 3
+// The `str` library.
+#unit classical
+
+fn show(n: i64) {
+    if n >= 10 { show(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+fn ord(o: Ord) -> *[char] {
+    match o { Ord::Lt => "Lt", Ord::Eq => "Eq", Ord::Gt => "Gt" }
+}
+
+fn main() -> i32 {
+    print(if str::eq("abc", "abc") { "true " } else { "false " });
+    print(if str::eq("abc", "abd") { "true " } else { "false " });
+    print(ord(str::cmp("ab", "abc")));
+    print(" ");
+    print(ord(str::cmp("b", "abc")));
+    print(" ");
+    print(ord(str::cmp("x", "x")));
+    print(" / ");
+
+    let parts = str::split("a,b,,c", ",");
+    let joined = str::join(&parts, "|");
+    print(&joined);
+    print(" / ");
+    let words: [string] = ["a", "b", "c"];
+    print(&str::join(&words, ", "));
+    print(" / ");
+
+    match str::parse::<i64>("42") { Some(n) => show(n), None => print("none") }
+    print(" ");
+    match str::parse::<f64>("1.5") { Some(x) => print(&tcon::emit(&x)), None => print("none") }
+    print(" ");
+    match str::parse::<bool>("true") { Some(b) => print(if b { "true" } else { "false" }), None => print("none") }
+    print(" ");
+    match str::parse::<i64>("forty") { Some(_) => print("some"), None => print("none") }
+    print(" / ");
+
+    let s = clone("ñ€𝄞");
+    let bytes = str::to_utf8(&s);
+    show(bytes.len() as i64 - 2);
+    print(" ");
+    match str::from_utf8(&bytes) {
+        Some(t) => { print(&t); print(if str::eq(&t, &s) { " ok" } else { " differ" }); }
+        None => print("none"),
+    }
+    let broken: [u8] = [226, 130];
+    match str::from_utf8(&broken) { Some(_) => print(" good"), None => print(" bad") }
+    print(" / ");
+    show(str::len("héé") as i64);
+    print("\n");
+    0
+}

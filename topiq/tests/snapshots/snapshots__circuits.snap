@@ -1,0 +1,139 @@
+---
+source: tests/snapshots.rs
+expression: "text.join(\"\\n\")"
+---
+OPENQASM 3.0;
+include "stdgates.inc";
+// bell, at conductor 8
+qubit[2] q;
+bit[2] c;
+h q[0];
+ctrl @ x q[0], q[1];
+c[0] = measure q[0];
+c[1] = measure q[1];
+// result: {c[0], c[1]}
+
+OPENQASM 3.0;
+include "stdgates.inc";
+// steps, at conductor 8
+// dynamic: its structure depends on what it measures
+input int[64] p0; // n: usize
+input int[64] p1; // k: core::phase<8>
+qubit[4] q;
+bit[4] c;
+int[64] v0;
+int[64] v1;
+int[64] v2;
+h q[0];
+h q[1];
+h q[2];
+for int[64] v0 in [0:(p0) - 1] {
+    p(2*pi*(p1.0)/8) q[0];
+}
+ctrl @ negctrl @ x q[0], q[1], q[3];
+ctrl @ x q[3], q[2];
+negctrl @ z q[3], q[2];
+ctrl @ negctrl @ x q[0], q[1], q[3];
+c[0] = measure q[0];
+c[1] = measure q[1];
+c[2] = measure q[2];
+v1 = (c[0] ? 2 : 1); // lifted
+x q[3];
+for int[64] v2 in [0:(v1) - 1] {
+    h q[3];
+}
+c[3] = measure q[3];
+// result: (c[1] ? c[3] : false)
+
+OPENQASM 3.0;
+include "stdgates.inc";
+// query, at conductor 8
+// oracle: an operator on qubits of widths (1, 1) supplied by the caller
+qubit[2] q;
+bit[2] c;
+x q[1];
+h q[0];
+h q[1];
+oracle q[0], q[1];
+h q[0];
+c[0] = measure q[0];
+c[1] = measure q[1];
+// result: c[0]
+
+OPENQASM 3.0;
+include "stdgates.inc";
+// deutsch, at conductor 8
+// oracle: an operator on qubits of widths (1, 1) supplied by the caller, which must be monic
+//   and must leave its argument 1, given in the state (1/2*z8 + -1/2*z8^3, -1/2*z8 + 1/2*z8^3), in that state
+qubit[2] q;
+bit[1] c;
+x q[1];
+h q[1];
+h q[0];
+oracle q[0], q[1];
+h q[0];
+c[0] = measure q[0];
+h q[1];
+x q[1];
+// result: (c[0] ? variant1 : variant0)
+
+OPENQASM 3.0;
+include "stdgates.inc";
+// prepared, at conductor 8
+qubit[3] q;
+bit[3] c;
+x q[2];
+x q[0];
+ctrl @ x q[0], q[2];
+negctrl @ negctrl @ h q[1], q[2], q[0];
+negctrl @ negctrl @ p(2*pi*5/8) q[1], q[2], q[0];
+ctrl @ x q[0], q[2];
+c[0] = measure q[0];
+c[1] = measure q[1];
+c[2] = measure q[2];
+// result: {c[0], c[1], c[2]}
+
+OPENQASM 3.0;
+include "stdgates.inc";
+// keyed, at conductor 8
+qubit[2] q;
+bit[2] c;
+x q[1];
+h q[0];
+ctrl @ z q[0], q[1];
+h q[0];
+c[0] = measure q[0];
+c[1] = measure q[1];
+// result: {c[0], c[1]}
+
+OPENQASM 3.0;
+include "stdgates.inc";
+// looked_up, at conductor 8
+qubit[2] q;
+bit[1] c;
+x q[0];
+c[0] = measure q[0];
+if (!(c[0])) {
+} else {
+    if (c[0]) {
+        z q[1];
+    }
+}
+// forget q[1]
+// result: (c[0] ? 1 : 0)
+
+OPENQASM 3.0;
+include "stdgates.inc";
+// sectors, at conductor 8
+qubit[2] q;
+bit[1] c;
+x q[1];
+negctrl @ x q[1], q[0];
+ctrl @ z q[1], q[0];
+c[0] = measure q[1];
+if (!(c[0])) {
+    // forget q[0]
+} else {
+    // forget q[0]
+}
+// result: (!(c[0]) ? false : true)

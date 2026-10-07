@@ -1,0 +1,54 @@
+{% extends "layout.html" %}
+{% block title %}{{ page.unit.name }} | {{ project }}{% endblock %}
+{% block content %}
+{%- import "macros.html" as m %}
+<div class="heading">
+  <h1 class="title">{% if page.unit.kind %}{{ page.unit.kind|capitalize }} unit{% else %}Unit{% endif %} <span class="name">{{ page.unit.name }}</span></h1>
+  {%- if page.source %}
+  <a class="src" href="{{ root }}{{ page.source }}">source</a>
+  {%- endif %}
+</div>
+{%- if page.unit.notes %}
+<p class="notes">{% for n in page.unit.notes %}<span class="note">{{ n }}</span>{% endfor %}</p>
+{%- endif %}
+<div class="doc">{{ page.doc|safe }}</div>
+
+{%- if page.imports or page.imported_by %}
+<dl class="deps">
+  {%- if page.imports %}
+  <dt>Imports</dt>
+  <dd>{% for l in page.imports %}{{ m.unit_link(l, root) }}{% if not loop.last %}, {% endif %}{% endfor %}</dd>
+  {%- endif %}
+  {%- if page.imported_by %}
+  <dt>Imported by</dt>
+  <dd>{% for l in page.imported_by %}{{ m.unit_link(l, root) }}{% if not loop.last %}, {% endif %}{% endfor %}</dd>
+  {%- endif %}
+</dl>
+{%- endif %}
+
+{%- for s in page.sections %}
+<h2 id="{{ s.id }}">{{ s.title }}</h2>
+<table class="items">
+  {%- for e in s.entries %}
+  <tr{% if e.deprecated %} class="deprecated"{% endif %}>
+    <td class="item-name"><a class="name" href="{{ root }}{{ e.href }}">{{ e.name }}</a></td>
+    <td class="summary">{{ e.summary|safe }}</td>
+  </tr>
+  {%- endfor %}
+</table>
+{%- endfor %}
+
+{%- if page.foreign %}
+<h2 id="foreign">Methods on other units’ types</h2>
+{%- for x in page.foreign %}
+{{ m.member(x, root) }}
+{%- endfor %}
+{%- endif %}
+
+{%- if page.interface %}
+<h2 id="interface">Interface</h2>
+<p>This unit was compiled earlier without its source, so only what it offers is known: the types of its functions and objects, with no documentation.</p>
+<pre class="signature declaration">{% for line in page.interface %}{{ line|safe }}
+{% endfor %}</pre>
+{%- endif %}
+{% endblock %}

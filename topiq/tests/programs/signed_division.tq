@@ -1,0 +1,11 @@
+// expect: abort RA01 at 6
+// `MIN / -1`, the one signed division whose quotient does not fit.
+#unit classical
+
+fn div(a: i64, b: i64) -> i64 {
+    a / b
+}
+
+fn main() -> i32 {
+    div(-9223372036854775808, -1) as i32
+}

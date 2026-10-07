@@ -1,0 +1,20 @@
+// A locale, and the two ways a contract is ascribed. Between them these
+// exercise three constructs that are easy to get wrong: a keyword used as a
+// path segment in `phase::<8>::of`, a path continued after a turbofish, and a
+// `;` that continues an argument list rather than starting a new annotation,
+// in `[expect: monic; contract = flat(0)]`.
+#unit quantum
+
+cover  Marked = pt(|11>);
+gauge  GM     = none;
+base   M      = [qubit; 2], Marked, GM;
+
+locale MarkedIn = M of Search {
+    [expect: stat(phase::<8>::of(4))]
+    fn reflect(r: *[qubit; 2]);
+}
+
+[cover: fin{ |00>, |11> }]
+[gauge: fid((|00> + |11>) * isq2)]
+[expect: monic; contract = flat(0)]
+fn my_op(r: [qubit; 2]) -> [qubit; 2] { r }

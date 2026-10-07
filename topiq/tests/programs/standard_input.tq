@@ -1,0 +1,71 @@
+// expect: exit 0
+// stdin: héllo\x0D
+// stdin: a\xFFb\xE2\x82c
+// stdin: 😀 rest
+// stdin: last
+// stdout: [héllo]
+// stdout: a|�|b|�|c|\n|
+// stdout: 😀
+// stdout: [ rest]
+// stdout: [last\n]
+// stdout: end end end
+// stdout: one stream
+// Standard input read from a pipe through `io::stdin`, one buffer for every
+// way of reading it: a line ending "\r\n", a byte that cannot start a
+// character and an encoding cut short, which leaves the byte after it to be
+// read, `getch` with no console, the rest at once, and the end, which stays
+// ended. `io::stdout` writes in order with `print`, and `io` and `stdin`
+// stay free as names.
+#unit classical
+
+fn shown(c: char) {
+    if c == '\n' {
+        print("\\n");
+    } else {
+        print(&[c]);
+    }
+}
+
+fn run() -> Result<(), io::Error> {
+    match io::stdin.read_line()? {
+        Some(line) => { print("["); print(&line); print("]\n"); }
+        None => print("no line\n"),
+    }
+    for _ in 0..6 {
+        match io::stdin.read_char()? {
+            Some(c) => { shown(c); print("|"); }
+            None => print("none|"),
+        }
+    }
+    print("\n");
+    match io::stdin.getch()? {
+        Some(c) => { shown(c); print("\n"); }
+        None => print("no key\n"),
+    }
+    match io::stdin.read_line()? {
+        Some(line) => { print("["); print(&line); print("]\n"); }
+        None => print("no line\n"),
+    }
+    let rest = io::stdin.read_all()?;
+    print("[");
+    for c in &rest.chars {
+        shown(*c);
+    }
+    print("]\n");
+    print(if io::stdin.read_line()?.is_none() { "end" } else { "more" });
+    print(if io::stdin.read_char()?.is_none() { " end" } else { " more" });
+    print(if io::stdin.getch()?.is_none() { " end\n" } else { " more\n" });
+    print("one");
+    io::stdout.write(" stream")?;
+    print("\n");
+    Ok(())
+}
+
+fn main() -> i32 {
+    let io = 0;
+    let stdin = 0;
+    match run() {
+        Ok(()) => io + stdin,
+        Err(_) => 1,
+    }
+}

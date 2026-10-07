@@ -1,0 +1,22 @@
+// expect: exit 0
+// stdout: { x: 3, y: -4 }
+// Structural serialisation written with introspection: a type's own
+// `to_tcon`, made by a macro applied to each of its fields.
+#unit classical
+
+struct Point { x: i64, y: i64 }
+
+#define EMIT_FIELD(FIELD, NAME, TY, IDX) tcon::emit_pair(out, NAME, &self.FIELD);
+
+fn Point.to_tcon(self: *const Point, out: *tcon::Writer) {
+    tcon::begin(out);
+    @foreach_field(Point, EMIT_FIELD)
+    tcon::end(out);
+}
+
+fn main() -> i32 {
+    let p = Point { x: 3, y: -4 };
+    print(&tcon::emit(&p));
+    print("\n");
+    0
+}

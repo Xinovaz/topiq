@@ -1,0 +1,75 @@
+// expect: exit 0
+// stdout: 2 true true | 2 true true | 2 true true | 400 near
+// Inner products seen through circuits. The probabilities of the swap test
+// and the Hadamard test, found exactly by following every way their
+// measurements go, are those the inner products of the states they are
+// given say, computed with `adjoint`; and the frequencies of a sample of the
+// swap test are near them.
+#unit classical
+import circs;
+import qpu;
+
+// Prints how many outcomes `dist` has, and whether `false` has probability
+// `p` and `true` the rest.
+fn agrees(dist: *const [qpu::Chance<bool>], p: *const cyclo<48>) {
+    let fine_false = false;
+    let fine_true = false;
+    for c in dist {
+        if c.outcome {
+            fine_true = c.probability == cyclo::<48>::from(1) - *p;
+        } else {
+            fine_false = c.probability == *p;
+        }
+    }
+    print(&tcon::emit(&dist.len()));
+    print(if fine_false { " true" } else { " false" });
+    print(if fine_true { " true" } else { " false" });
+}
+
+fn main() -> i32 {
+    let dev = qpu::connect("sim://exact").unwrap();
+    let half = cyclo::<48>::of(&frac::of(1, 2));
+    let one = cyclo::<48>::from(1);
+
+    // the swap test of |0> and |+>: `false` with probability
+    // (1 + |<a|b>|²)/2, which is 3/4
+    let a = quon::parse("|0>").unwrap();
+    let b = quon::parse("isq2 * |0> + isq2 * |1>").unwrap();
+    let ra = dev.register(1);
+    let rb = dev.register(1);
+    qpu::prepare(&a, ra).unwrap();
+    qpu::prepare(&b, rb).unwrap();
+    let ip = a.inner(&b);
+    agrees(&dev.distribution(circs::swap_pair, ra, rb).unwrap(), &((one + adjoint(ip) * ip) * half));
+    print(" | ");
+
+    // the Hadamard test of T in |+>: `false` with probability (1 + Re z)/2,
+    // or (1 + Im z)/2, for z = <+|T|+>, neither of which is rational
+    let plus: vec<cyclo<48>, 2> = [isq2, isq2];
+    let t: mat<cyclo<48>, 2, 2> = [[1, 0], [0, w(1, 8)]];
+    let z = adjoint(plus) * t * plus;
+    let re = (z + adjoint(z)) * half;
+    let im = (z - adjoint(z)) * half / i;
+    let r = dev.register(1);
+    qpu::prepare(&b, r).unwrap();
+    agrees(&dev.distribution(circs::hadamard_re, r).unwrap(), &((one + re) * half));
+    print(" | ");
+    agrees(&dev.distribution(circs::hadamard_im, r).unwrap(), &((one + im) * half));
+    print(" | ");
+
+    // 400 runs of the swap test, which gives `false` near three times in four
+    let o = qpu::RunOpts { shots: 400, seed: Some(7) };
+    let counts = dev.sample(circs::swap_pair, &o, ra, rb).unwrap();
+    let total: u32 = 0;
+    let falses: u32 = 0;
+    for c in &counts {
+        total += c.count;
+        if !c.outcome {
+            falses += c.count;
+        }
+    }
+    print(&tcon::emit(&total));
+    let f = (falses as f64) / (total as f64);
+    print(if f > 0.65 && f < 0.85 { " near\n" } else { " far\n" });
+    0
+}

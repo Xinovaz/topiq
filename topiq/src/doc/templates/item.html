@@ -1,0 +1,22 @@
+{% extends "layout.html" %}
+{% block title %}{{ page.unit }}::{{ page.name }} | {{ project }}{% endblock %}
+{% block content %}
+{%- import "macros.html" as m %}
+<div class="heading">
+  <h1 class="title">{{ page.kind }} <span class="name"><a href="{{ root }}{{ sidebar.href }}">{{ page.unit }}</a>::{{ page.name }}</span></h1>
+  {%- if page.source %}
+  <a class="src" href="{{ root }}{{ page.source }}">source</a>
+  {%- endif %}
+</div>
+{%- if page.deprecated is not none %}
+<p class="deprecated-banner">Deprecated{% if page.deprecated %}: {{ page.deprecated }}{% endif %}</p>
+{%- endif %}
+<pre class="signature declaration">{{ page.signature|safe }}</pre>
+<div class="doc">{{ page.doc|safe }}</div>
+{%- for g in page.groups %}
+<h2 id="{{ g.id }}">{{ g.title }}</h2>
+{%- for x in g.members %}
+{{ m.member(x, root) }}
+{%- endfor %}
+{%- endfor %}
+{% endblock %}

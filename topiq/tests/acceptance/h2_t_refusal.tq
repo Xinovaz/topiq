@@ -1,0 +1,10 @@
+// expect: EJ05
+// H.2, the T refusal: frame(flat(0)) fails with the schedule (0, π/4), the
+// product witness and the entangled witness. As printed, less `|+>`, which
+// is no ket (Issues item 5), and with the `gates` its `t` comes from.
+#unit quantum
+import gates;
+
+[cover: fin{ |0>, |1> }] [gauge: fid((|0> + |1>) * isq2)]
+[expect: frame(flat(0))]
+fn bad(q: *qubit) { t(q); }

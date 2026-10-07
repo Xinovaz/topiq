@@ -1,0 +1,10 @@
+// expect: exit 0
+// stdout: Hello, world!
+// stdout: héllo ✓ 𝄞 — one, two, three and four bytes
+#unit classical
+
+fn main() -> i32 {
+    print("Hello, world!\n");
+    print("héllo ✓ 𝄞 — one, two, three and four bytes\n");
+    0
+}

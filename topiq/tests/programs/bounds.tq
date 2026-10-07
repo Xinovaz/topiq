@@ -1,0 +1,11 @@
+// expect: abort RA06 at 5
+#unit classical
+
+fn get(xs: *[i32], i: usize) -> i32 {
+    xs[i]
+}
+
+fn main() -> i32 {
+    let a = [1, 2, 3];
+    get(&a, 2) + get(&a, 3)
+}

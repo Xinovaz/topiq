@@ -1,0 +1,30 @@
+// expect: exit 0
+// stdout: 110 yyyyyyyy 001 1
+// Map locales of states, and one held as a value.
+#unit classical
+import circs;
+import qpu;
+
+fn digit(b: bool) {
+    if b { print("1"); } else { print("0"); }
+}
+
+fn main() -> i32 {
+    let (k, a, b) = circs::loaded(0);
+    digit(k);
+    digit(a);
+    digit(b);
+    print(" ");
+    for i in 0..8 {
+        if circs::agree(0) { print("y"); } else { print("n"); }
+    }
+    print(" ");
+    let (i, c, d) = circs::chosen(0);
+    digit(i == 1);
+    digit(c);
+    digit(d);
+    print(" ");
+    digit(circs::held(0));
+    print("\n");
+    0
+}

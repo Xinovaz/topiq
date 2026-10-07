@@ -1,0 +1,77 @@
+// expect: exit 0
+// stdout: { host: "example.org", port: 8443, tls: { cert: "a.pem", key: "a\"key" }, ratio: 0.1, tags: ["x", "y"], mode: Fast } / example.org 8443 a.pem true / 3 null Slow { level: 2 } Pair(1, -2) / 1.0e21 1.5e-7 100.0 -0.0 0.3 inf / 5:33 has no field
+// TCON: writing values of any type, and reading them back.
+#unit classical
+
+struct Tls { cert: [char], key: [char] }
+enum Mode { Fast, Slow { level: u8 }, Pair(i32, i64) }
+struct Config { host: [char], port: u16, tls: Tls?, ratio: f64, tags: [[char]], mode: Mode }
+
+fn show(n: i64) {
+    if n >= 10 { show(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+fn main() -> i32 {
+    let c = Config {
+        host: clone("example.org"),
+        port: 8443,
+        tls: Some(Tls { cert: clone("a.pem"), key: clone("a\"key") }),
+        ratio: 0.1,
+        tags: [clone("x"), clone("y")],
+        mode: Mode::Fast,
+    };
+    let text = tcon::emit(&c);
+    print(&text);
+    print(" / ");
+
+    match tcon::parse::<Config>(&text) {
+        Ok(back) => {
+            print(&back.host);
+            print(" ");
+            show(back.port as i64);
+            print(" ");
+            match back.tls {
+                Some(t) => print(&t.cert),
+                None => print("none"),
+            }
+            print(if back.ratio == 0.1 { " true" } else { " false" });
+        }
+        Err(e) => print(&e.detail),
+    }
+    print(" / ");
+
+    let n: i64? = Some(3);
+    print(&tcon::emit(&n));
+    print(" ");
+    let m: i64? = None;
+    print(&tcon::emit(&m));
+    print(" ");
+    print(&tcon::emit(&Mode::Slow { level: 2 }));
+    print(" ");
+    print(&tcon::emit(&Mode::Pair(1, 0 - 2)));
+    print(" / ");
+
+    let zero = 0.0;
+    let floats = [1.0e21, 1.5e-7, 100.0, -zero, 0.1 + 0.2 - 0.0000000000000000555, 1.0e308 * 10.0];
+    for i in 0..floats.len() {
+        if i > 0 { print(" "); }
+        print(&tcon::emit(&floats[i]));
+    }
+    print(" / ");
+
+    let bad = "{\n  host: \"h\",\n  port: 1,\n  ratio: 1.0,\n  tags: [], mode: Fast, colour: 3 }";
+    match tcon::parse::<Config>(bad) {
+        Ok(_) => print("parsed?"),
+        Err(e) => {
+            show(e.line as i64);
+            print(":");
+            show(e.col as i64);
+            print(" ");
+            if e.detail.len() > 0 { print("has no field"); }
+        }
+    }
+    print("\n");
+    0
+}

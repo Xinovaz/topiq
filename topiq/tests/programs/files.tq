@@ -1,0 +1,53 @@
+// expect: exit 0
+// stdout: wrote / héllo, ζ world|line two| / NotFound / empty.
+// Whole files written and read back as text: a name and contents beyond
+// ASCII, a file that is not there, and an empty one.
+#unit classical
+
+fn line(text: *[char]) {
+    for c in text {
+        if *c == '\n' {
+            print("|");
+        } else {
+            print(&[*c]);
+        }
+    }
+}
+
+fn why(e: *fs::Error) {
+    match e {
+        fs::Error::NotFound => print("NotFound"),
+        fs::Error::Denied => print("Denied"),
+        fs::Error::NotText => print("NotText"),
+        fs::Error::BadPath => print("BadPath"),
+        fs::Error::Io(_) => print("Io"),
+    }
+}
+
+fn main() -> i32 {
+    let path = "probe_ζ.txt";
+    match fs::write(path, "héllo, ζ world\nline two\n") {
+        Ok(()) => print("wrote / "),
+        Err(e) => { why(&e); return 1; }
+    }
+    match fs::read(path) {
+        Ok(text) => line(&text),
+        Err(e) => { why(&e); return 2; }
+    }
+    print(" / ");
+    match fs::read("not_there.txt") {
+        Ok(_) => { return 3; }
+        Err(e) => why(&e),
+    }
+    print(" / ");
+    match fs::write("empty.txt", "") {
+        Ok(()) => {}
+        Err(e) => { why(&e); return 5; }
+    }
+    match fs::read("empty.txt") {
+        Ok(text) => if text.len() == 0 { print("empty") } else { print("not empty") },
+        Err(e) => why(&e),
+    }
+    print(".\n");
+    0
+}

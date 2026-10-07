@@ -1,0 +1,6 @@
+// The configuration used when none is given.
+ServerConfig {
+    host: "localhost",
+    port: 8080,
+    tls: null,
+}

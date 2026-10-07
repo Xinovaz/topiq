@@ -1,0 +1,352 @@
+//! The `io` library: streams of text.
+//!
+//! A `Stream` is somewhere text comes from or goes to: standard input,
+//! output or error, which are the objects `stdin`, `stdout` and `stderr`, or
+//! a file, which `fs::open` and `fs::create` give. Text is read and written
+//! as UTF-8, except at a console, which gives what is typed as it is typed.
+//!
+//! Reading is buffered: a stream reads ahead of what it gives. `stdin` is
+//! one object, so everything that reads standard input reads through the one
+//! buffer, and nothing read ahead is lost. Writing is not buffered: what
+//! `write` is given has reached the system when it returns, in order with
+//! what `print` writes.
+#unit classical
+
+/// Why a stream could not be opened, read or written.
+enum Error {
+    /// Nothing is at the path.
+    NotFound,
+    /// The system refused access to it, or it is in use.
+    Denied,
+    /// Its bytes are not UTF-8, so it holds no text.
+    NotText,
+    /// The path holds the zero character, which no path can.
+    BadPath,
+    /// Another failure, with the system's code for it.
+    Io(u32),
+}
+
+/// Somewhere text comes from or goes to. A file's stream closes the file
+/// when it is destroyed; a standard stream is the program's, and is never
+/// closed.
+struct Stream {
+    // the system's handle, found when first used for a standard stream
+    handle: i64,
+    // 1, 2 or 3 for standard input, output or error, or 0 for a file
+    standard: u32,
+    // whether the handle has been found, and asked whether it is a console's
+    ready: bool,
+    console: bool,
+    // bytes read and not yet given, from `at` on, and whether the system
+    // has none after them
+    bytes: [u8],
+    at: usize,
+    ended: bool,
+    // characters a console gave and not yet given, from `next` on
+    chars: [char],
+    next: usize,
+}
+
+/// Standard input, output and error, whose handles are found when each is
+/// first used.
+let stdin: Stream = Stream {
+    handle: 0, standard: 1, ready: false, console: false,
+    bytes: [], at: 0, ended: false, chars: [], next: 0,
+};
+let stdout: Stream = Stream {
+    handle: 0, standard: 2, ready: false, console: false,
+    bytes: [], at: 0, ended: false, chars: [], next: 0,
+};
+let stderr: Stream = Stream {
+    handle: 0, standard: 3, ready: false, console: false,
+    bytes: [], at: 0, ended: false, chars: [], next: 0,
+};
+
+impl Stream {
+    /// The next character, or `None` at the end.
+    ///
+    /// From a console, a line is read once Enter ends it, as the console
+    /// edits and shows it, and its characters are given one by one; Enter
+    /// gives '\n'. A line that starts with Ctrl+Z reads as the end, though
+    /// the console goes on to read the lines after it.
+    ///
+    /// Anything else is read as UTF-8, and a carriage return is given as it
+    /// is. A byte that cannot start a character gives U+FFFD. So does an
+    /// encoding that is cut short, overlong, a surrogate, or beyond U+10FFFF;
+    /// the bytes that it is made of up to where it goes wrong are read, and
+    /// the rest is read as what follows.
+    fn read_char(self: *Stream) -> Result<char?, Error> {
+        prepare(self);
+        if self.console {
+            console_char(self, false)
+        } else {
+            utf8_char(self)
+        }
+    }
+
+    /// The next line, without the '\n' that ends it or a '\r' before that,
+    /// or `None` at the end. The last line need not end with '\n'.
+    fn read_line(self: *Stream) -> Result<string?, Error> {
+        let line: string = "";
+        let any = false;
+        loop {
+            match self.read_char()? {
+                Some(c) => {
+                    any = true;
+                    if c == '\n' {
+                        break;
+                    }
+                    line.chars.push(c);
+                }
+                None => { break; }
+            }
+        }
+        if !any {
+            return Ok(None);
+        }
+        let n = line.len();
+        if n > 0 && line.chars[n - 1] == '\r' {
+            line.chars.truncate(n - 1);
+        }
+        Ok(Some(line))
+    }
+
+    /// Everything up to the end.
+    fn read_all(self: *Stream) -> Result<string, Error> {
+        let out: string = "";
+        loop {
+            match self.read_char()? {
+                Some(c) => { out.chars.push(c); }
+                None => { break; }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The next key typed at a console, read as soon as it is typed and not
+    /// shown, or `None` at the end. Enter gives '\n'. Keys that type no
+    /// character, such as the arrows and Shift, are passed over, and Ctrl+C
+    /// still ends the program. Characters a line read left unread come first.
+    ///
+    /// A stream that is not a console's has no keys, and gives its next
+    /// character as `read_char` does.
+    fn getch(self: *Stream) -> Result<char?, Error> {
+        prepare(self);
+        if self.console {
+            console_char(self, true)
+        } else {
+            utf8_char(self)
+        }
+    }
+
+    /// Writes `text` as UTF-8.
+    fn write(self: *Stream, text: *const [char]) -> Result<(), Error> {
+        prepare(self);
+        let bytes = str::to_utf8(text);
+        while bytes.len() > 0 {
+            let put = __file_write(self.handle, &bytes);
+            if put < 0 {
+                return Err(__error_of(put));
+            }
+            if put == 0 {
+                return Err(Error::Io(0));
+            }
+            // what the system took is gone; the rest is written again
+            let rest: [u8] = [];
+            for i in (put as usize)..bytes.len() {
+                rest.push(bytes[i]);
+            }
+            bytes = rest;
+        }
+        Ok(())
+    }
+
+    fn $drop(self: *Stream) {
+        if self.standard == 0 {
+            __file_close(self.handle);
+        }
+    }
+}
+
+/// The stream of a file `fs` opened.
+fn __of_file(handle: i64) -> Stream {
+    Stream {
+        handle: handle, standard: 0, ready: false, console: false,
+        bytes: [], at: 0, ended: false, chars: [], next: 0,
+    }
+}
+
+/// The error a negated system code stands for.
+fn __error_of(negated: i64) -> Error {
+    let code = (-negated) as u32;
+    // the system's codes for a missing file or directory, and for access
+    // refused or a file another process holds
+    if code == 2 || code == 3 {
+        Error::NotFound
+    } else if code == 5 || code == 32 {
+        Error::Denied
+    } else {
+        Error::Io(code)
+    }
+}
+
+/// Finds a standard stream's handle, and whether a stream is a console's,
+/// the first time it is used.
+static fn prepare(s: *Stream) {
+    if s.ready {
+        return;
+    }
+    if s.standard != 0 {
+        s.handle = __std_handle(s.standard - 1);
+    }
+    s.console = __is_console(s.handle);
+    s.ready = true;
+}
+
+///////////////////
+// CONSOLE INPUT //
+///////////////////
+
+/// The next character a console gives: one left by an earlier read, or else
+/// one from a new read, of a key when `raw` and of a line otherwise.
+static fn console_char(s: *Stream, raw: bool) -> Result<char?, Error> {
+    if s.next == s.chars.len() {
+        read_console(s, raw)?;
+        if s.chars.len() == 0 {
+            return Ok(None);
+        }
+    }
+    let c = s.chars[s.next];
+    s.next += 1;
+    Ok(Some(c))
+}
+
+/// Reads a console's UTF-16 units into characters: Enter types "\r\n" in a
+/// line and '\r' as a key, and each becomes '\n'.
+static fn read_console(s: *Stream, raw: bool) -> Result<(), Error> {
+    let units = console_units(s, if raw { 1 } else { 1024 }, raw)?;
+    // a read may stop between the halves of a pair, or between the '\r' and
+    // '\n' of a line's end
+    let n = units.len();
+    if n > 0 && (is_high(units[n - 1]) || (!raw && units[n - 1] == 13)) {
+        let more = console_units(s, 1, raw)?;
+        for u in &more {
+            units.push(*u);
+        }
+    }
+    s.chars = [];
+    s.next = 0;
+    let i = 0;
+    while i < units.len() {
+        let u = units[i] as u32;
+        i += 1;
+        if u == 13 {
+            if i < units.len() && units[i] == 10 {
+                i += 1;
+            }
+            s.chars.push('\n');
+        } else if is_high(u as u16) && i < units.len() && is_low(units[i]) {
+            let low = units[i] as u32;
+            i += 1;
+            s.chars.push((65536 + (u - 55296) * 1024 + (low - 56320)) as char);
+        } else if u >= 55296 && u < 57344 {
+            s.chars.push('\u{FFFD}');
+        } else {
+            s.chars.push(u as char);
+        }
+    }
+    // Ctrl+Z at the start of a line is how a console says the input ends
+    if !raw && s.chars.len() > 0 && s.chars[0] == '\u{1A}' {
+        s.chars = [];
+    }
+    Ok(())
+}
+
+/// Up to `room` units read from a console.
+static fn console_units(s: *Stream, room: usize, raw: bool) -> Result<[u16], Error> {
+    let units: [u16] = [];
+    for _ in 0..room {
+        units.push(0);
+    }
+    let got = __console_read(s.handle, &units, raw);
+    if got < 0 {
+        return Err(__error_of(got));
+    }
+    units.truncate(got as usize);
+    Ok(units)
+}
+
+static fn is_high(u: u16) -> bool { u >= 55296 && u < 56320 }
+static fn is_low(u: u16) -> bool { u >= 56320 && u < 57344 }
+
+/////////////////
+// UTF-8 INPUT //
+/////////////////
+
+/// The next character of a stream that gives bytes, decoded as UTF-8.
+static fn utf8_char(s: *Stream) -> Result<char?, Error> {
+    if !have(s, 1)? {
+        return Ok(None);
+    }
+    let b = s.bytes[s.at] as u32;
+    // how many bytes follow the first, what the first holds of the scalar,
+    // and the least scalar needing that many
+    let (more, c, least): (usize, u32, u32) = if b < 128 {
+        (0, b, 0)
+    } else if b >= 194 && b < 224 {
+        (1, b - 192, 128)
+    } else if b >= 224 && b < 240 {
+        (2, b - 224, 2048)
+    } else if b >= 240 && b < 245 {
+        (3, b - 240, 65536)
+    } else {
+        s.at += 1;
+        return Ok(Some('\u{FFFD}'));
+    };
+    have(s, 1 + more)?;
+    for k in 1..(1 + more) {
+        let i = s.at + k;
+        if i == s.bytes.len() || s.bytes[i] < 128 || s.bytes[i] >= 192 {
+            // the byte that is not part of it is left to be read next
+            s.at = i;
+            return Ok(Some('\u{FFFD}'));
+        }
+        c = c * 64 + (s.bytes[i] as u32 - 128);
+    }
+    s.at += 1 + more;
+    if c < least || c > 1114111 || (c >= 55296 && c < 57344) {
+        return Ok(Some('\u{FFFD}'));
+    }
+    Ok(Some(c as char))
+}
+
+/// Whether `n` bytes are buffered, reading until they are or the system has
+/// no more. Once it has none, the stream has ended, and stays ended.
+static fn have(s: *Stream, n: usize) -> Result<bool, Error> {
+    while s.bytes.len() - s.at < n && !s.ended {
+        if s.at > 0 {
+            let rest: [u8] = [];
+            for i in s.at..s.bytes.len() {
+                rest.push(s.bytes[i]);
+            }
+            s.bytes = rest;
+            s.at = 0;
+        }
+        let chunk: [u8] = [];
+        for _ in 0..4096 {
+            chunk.push(0);
+        }
+        let got = __file_read(s.handle, &chunk);
+        // a pipe whose writer has closed it is at its end
+        if got == 0 || got == -109 {
+            s.ended = true;
+        } else if got < 0 {
+            return Err(__error_of(got));
+        } else {
+            for i in 0..(got as usize) {
+                s.bytes.push(chunk[i]);
+            }
+        }
+    }
+    Ok(s.bytes.len() - s.at >= n)
+}

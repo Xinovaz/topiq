@@ -1,0 +1,42 @@
+// expect: exit 42
+#unit classical
+
+enum Shape { Empty, Square(i64), Rect { w: i64, h: i64 } }
+
+fn area(s: *Shape) -> i64 {
+    match s {
+        Shape::Empty => 0,
+        Shape::Square(side) => side * side,
+        Shape::Rect { w, h } => w * h,
+    }
+}
+
+enum Op { Add, Sub, Mul }
+
+fn apply(op: Op, a: i64, b: i64) -> i64 {
+    match op { Op::Add => a + b, Op::Sub => a - b, Op::Mul => a * b }
+}
+
+fn classify(n: i32) -> i32 {
+    match n {
+        -1 => 10,
+        0 => 20,
+        _ => 30,
+    }
+}
+
+fn letter(c: char) -> u32 {
+    match c { 'a' => 1, 'b' => 2, _ => 0 }
+}
+
+fn main() -> i32 {
+    let shapes = [Shape::Square(3), Shape::Rect { w: 2, h: 5 }, Shape::Empty];
+    let total = 0;
+    for i in 0..shapes.len() { total += area(&shapes[i]); }
+    total = apply(Op::Mul, total, 2);
+    total = apply(Op::Add, total, 4);
+    if apply(Op::Sub, 1, 1) != 0 { return 1; }
+    if classify(-1) + classify(0) + classify(7) != 60 { return 2; }
+    if letter('b') + letter('z') != 2 { return 3; }
+    total as i32
+}

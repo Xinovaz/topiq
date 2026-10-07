@@ -1,0 +1,29 @@
+// A unit whose types other units call methods on, and one of which other
+// units may add methods to.
+#unit classical
+
+[open]
+struct V2 { x: i64, y: i64 }
+
+impl V2 {
+    fn new(x: i64, y: i64) -> V2 { V2 { x: x, y: y } }
+    fn dot(self: *V2, o: *V2) -> i64 { self.x * o.x + self.y * o.y }
+    fn scale(self: *V2, k: i64) { self.x = self.x * k; self.y = self.y * k; }
+    fn $add(self: *V2, o: *V2) -> V2 { V2 { x: self.x + o.x, y: self.y + o.y } }
+    fn $neg(self: V2) -> V2 { V2 { x: -self.x, y: -self.y } }
+    fn $eq(self: *V2, o: *V2) -> bool { self.x == o.x && self.y == o.y }
+    fn $index(self: *V2, i: usize) -> *i64 { if i == 0 { &self.x } else { &self.y } }
+    fn $add_assign(self: *V2, o: V2) { self.x = self.x + o.x; self.y = self.y + o.y; }
+}
+
+// The same declaration, written outside the block.
+fn V2.sum(self: V2) -> i64 { self.x + self.y }
+
+struct Stack<T> { items: [T; 4], len: usize }
+
+impl Stack<T> {
+    fn holding(first: T) -> Stack<T> { Stack { items: [first; 4], len: 1 } }
+    fn push(self: *Stack<T>, v: T) { self.items[self.len] = v; self.len = self.len + 1; }
+    fn top(self: *Stack<T>) -> T { self.items[self.len - 1] }
+    fn map_top<U>(self: *Stack<T>, zero: U, one: U) -> U { if self.len > 1 { one } else { zero } }
+}

@@ -1,0 +1,60 @@
+// expect: exit 0
+// stdout: 14
+// stdout: 1
+// stdout: 0
+// stdout: 1
+#unit classical
+
+// A constant is folded with the same arithmetic the compiled program uses.
+let QUARTER: const f64 = 1.0 / 4.0;
+let SMALL: const f32 = 0.1;
+
+fn print_u64(n: u64) {
+    if n >= 10 { print_u64(n / 10); }
+    let digit = ["0123456789"[(n % 10) as usize]];
+    print(&digit);
+}
+
+fn print_bool(b: bool) {
+    if b { print("1"); } else { print("0"); }
+    print("\n");
+}
+
+fn area(r: f64) -> f64 { 3.5 * r * r }
+
+// Every comparison with a NaN is false, except `!=`, which is true.
+fn nan() -> f64 { 0.0 / 0.0 }
+
+fn classify(x: f32) -> i32 {
+    match x {
+        0.0 => 10,
+        1.5 => 20,
+        _ => 30,
+    }
+}
+
+fn main() -> i32 {
+    print_u64(area(2.0) as u64);
+    print("\n");
+
+    let n = nan();
+    print_bool(n != n);
+    print_bool(n == n || n < 1.0 || n >= 1.0);
+
+    // An `f32` computation is an `f32` computation: adding a value smaller
+    // than its precision changes nothing, while an `f64` keeps it.
+    let tiny: f32 = 0.000_000_01;
+    let one: f32 = 1.0;
+    print_bool(one + tiny == one && 1.0f64 + 0.000_000_01 != 1.0);
+
+    // Rounding is toward zero, and a fraction below zero truncates to zero.
+    if (-2.75 as i32) != -2 || (-0.5 as u8) != 0 { return 1; }
+    // The two types round a value each in its own way.
+    if (SMALL as f64) == 0.1 { return 2; }
+    if QUARTER * 4.0 != 1.0 { return 3; }
+    if classify(1.5) + classify(0.0) + classify(9.0) != 60 { return 4; }
+    // Infinities arrive rather than aborting.
+    let huge = 1.0e308 * 10.0;
+    if huge <= 0.0 || huge - huge == huge - huge { return 5; }
+    0
+}

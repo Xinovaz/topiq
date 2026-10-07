@@ -1,0 +1,26 @@
+// expect: exit 0
+// stdout: 2 3 held
+#unit classical
+import deutsch;
+
+fn describe(g: deutsch::Guess) -> i64 {
+    match g { deutsch::Guess::Constant => 1, deutsch::Guess::Balanced => 2 }
+}
+
+// A circuit handle is a value like any other: held, passed and returned.
+fn keep(c: circuit<fn(u32) -> deutsch::Guess>) -> circuit<fn(u32) -> deutsch::Guess> { c }
+
+fn show(n: i64) {
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+fn main() -> i32 {
+    let c = keep(deutsch::deutsch);
+    let spare = c;
+    show(describe(deutsch::Guess::Balanced));
+    print(" ");
+    show(deutsch::TRIALS as i64);
+    print(" held\n");
+    0
+}

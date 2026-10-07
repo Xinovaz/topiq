@@ -1,0 +1,15 @@
+// expect: exit 42
+// A later `let` shadows an earlier one and may read it; an inner block's
+// binding disappears at its end.
+#unit classical
+
+fn main() -> i32 {
+    let n = 5;
+    let n = n * 4;
+    let inner = {
+        let n = n + 100;
+        n
+    };
+    let n = n + 2;
+    if inner == 120 { n * 2 - 2 } else { 0 }
+}

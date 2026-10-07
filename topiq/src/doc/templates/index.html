@@ -1,0 +1,21 @@
+{% extends "layout.html" %}
+{% block title %}{{ project }} documentation{% endblock %}
+{% block content %}
+<h1 class="title">Documentation of <span class="name">{{ project }}</span></h1>
+<p class="lede">Every unit the program is made of: the units given, each unit they import, and the library units they use.</p>
+
+<h2 id="units">Units</h2>
+<table class="items">
+  {%- for u in units %}
+  <tr>
+    <td class="item-name"><a class="name" href="{{ u.href }}">{{ u.name }}</a></td>
+    <td class="notes">{% if u.kind %}<span class="note">{{ u.kind }}</span>{% endif %}{% for n in u.notes %}<span class="note">{{ n }}</span>{% endfor %}</td>
+    <td class="summary">{{ u.summary|safe }}</td>
+  </tr>
+  {%- endfor %}
+</table>
+
+<h2 id="dependencies">Dependencies</h2>
+<p>Each unit with the units it imports below it. A unit imported again is marked <code>(see above)</code>, and one importing a unit that imports it, <code>(cycle)</code>.</p>
+<pre class="tree">{{ tree|safe }}</pre>
+{% endblock %}

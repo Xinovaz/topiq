@@ -1,0 +1,16 @@
+// Simon's algorithm from the `algo` library, for an oracle whose secret is
+// 110.
+#unit quantum
+import gates;
+import algo;
+
+// f(x) = x xor (110 if the first bit of x is 1), so f(x) = f(x xor 110).
+fn hides110(q: *[qubit; 3], out: *[qubit; 3]) {
+    for i in 0..3 { cx(&q[i], &out[i]); }
+    cx(&q[0], &out[0]);
+    cx(&q[0], &out[1]);
+}
+
+// One string whose parity with the secret is even.
+[entry]
+fn sample(n: u32) -> [bool; 3] { algo::simon(hides110) }

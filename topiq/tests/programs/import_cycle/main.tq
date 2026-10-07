@@ -1,0 +1,23 @@
+// expect: exit 0
+// stdout: true true false 34 3.
+// Units that import each other: each is analysed against what the other
+// offers, until both have found everything they name in the other.
+#unit classical
+import even;
+import odd;
+
+fn main() -> i32 {
+    let t = even::Tree { size: 3, forest: odd::Forest { trees: 1 } };
+    let p = odd::forests();
+    print(&tcon::emit(&even::is_even(10)));
+    print(" ");
+    print(&tcon::emit(&odd::is_odd(7)));
+    print(" ");
+    print(&tcon::emit(&even::is_even(3)));
+    print(" ");
+    print(&tcon::emit(&odd::weight(&t)));
+    print(" ");
+    print(&tcon::emit(&(p.a.trees + p.b.trees)));
+    print(".\n");
+    0
+}

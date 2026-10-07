@@ -1,0 +1,13 @@
+// Gates judged over the computational pair the `gates` library names.
+#unit quantum
+import gates;
+
+// `x` swaps the two points and imparts no phase: rigid.
+[cover: gates::T01]
+[entry]
+fn flip(q: *qubit) { x(q); }
+
+// `t` imparts an eighth of a turn to |1> alone: not rigid.
+[cover: gates::T01]
+[entry]
+fn eighth(q: *qubit) { t(q); }

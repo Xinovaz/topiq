@@ -1,0 +1,29 @@
+// expect: exit 0
+// stdout: zzz
+// Functions whose parameters mix `const` and ordinary ones: each call's
+// `const` values are computed while translating, and the function is made
+// for them.
+#unit classical
+
+// `n` is known where the function is called; `x` only when it runs.
+fn scale(n: constexpr i64, x: i64) -> i64 {
+    let table: [i64; 3] = [n, n * 2, n * 3];
+    table[2] + x
+}
+
+fn repeat(times: constexpr usize, c: char) -> [char] {
+    let out: [char] = [];
+    for _ in 0..times {
+        out.push(c);
+    }
+    out
+}
+
+fn main() -> i32 {
+    let a = scale(2, 10);
+    let b = scale(5, 1);
+    let r = repeat(3, 'z');
+    print(&r);
+    print("\n");
+    if a == 16 && b == 16 && r.len() == 3 { 0 } else { 1 }
+}

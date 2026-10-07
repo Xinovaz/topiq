@@ -1,0 +1,92 @@
+// expect: exit 0
+// stdout: 1/3 | 1/10 | 1 | 5/3 | 1/2 | -1 | ζ | true | true | true | 0.3333333333333333 | 0.7071067811865475 | .
+// stdout: 27/82 - 9/82·ζ + 3/82·ζ^2 - 1/82·ζ^3 | 1 | -ζ^3 | 2 | { re: -3/4, im: 1 } | true | .
+// stdout: 1/2 | -1/2·ζ + 1/2·ζ^3 | 1 | 1 | 1000000000000000000000000000000000000000000000000000000000000000000000000.
+// stdout: 2 | 2 | 7 | none | + | - | none | true | .
+// Exact scalars: fractions, cyclotomic numbers, phases and complex numbers,
+// computed exactly while running and during translation alike, with the
+// signs of real cyclotomic numbers and the arguments of the others.
+#unit classical
+
+let HALF: const frac = 1/3 + 1/6;
+let MINUS: const cyclo<8> = -isq2;
+let ONE: const cyclo<8> = isq2 * isq2 * 2;
+let P: const phase<8> = phase::<8>::of(3) + phase::<8>::of(6);
+let ARG_I: const phase<8> = match i.arg() { Some(p) => p, None => phase::<8>::of(0) };
+let BELOW: const bool = match (isq2 * 2 - 1.4143).sign() { Some(Ord::Lt) => true, _ => false };
+
+fn say<T>(x: *const T) {
+    print(&tcon::emit(x));
+    print(" | ");
+}
+
+fn say_arg(x: cyclo<8>) {
+    match x.arg() {
+        Some(p) => say(&p.index()),
+        None => print("none | "),
+    }
+}
+
+fn say_sign(x: cyclo<8>) {
+    match x.sign() {
+        Some(Ord::Lt) => print("- | "),
+        Some(Ord::Eq) => print("0 | "),
+        Some(Ord::Gt) => print("+ | "),
+        None => print("none | "),
+    }
+}
+
+fn main() -> i32 {
+    let third: frac = 1/3;
+    say(&third);
+    let tenth: frac = 0.1;
+    say(&tenth);
+    say(&(third * 3));
+    say(&(2 - third));
+    say(&(isq2 * isq2));
+    say(&(i * i));
+    let z: cyclo<8> = w(1, 8);
+    say(&z);
+    let z4: cyclo<4> = w(1, 4);
+    let widened: cyclo<8> = z4;
+    say(&(widened == i));
+    say(&(z4 + z == i + z));
+    say(&(z - z4 == z - i));
+    say(&(third as f64));
+    say(&(isq2 as f64));
+    print(".\n");
+
+    let x = cyclo::<8>::from(3) + z;
+    match x.inv() {
+        Some(v) => { say(&v); say(&(v * x)); }
+        None => print("none"),
+    }
+    say(&adjoint(z));
+    say(&(phase::<8>::of(3) + phase::<8>::of(7)).index());
+    let q = cplx::of(frac::of(1, 2), frac::from(1));
+    say(&(q * q));
+    say(&(cyclo::<12>::zeta(4) + cyclo::<12>::zeta(8) == cyclo::<12>::from(-1)));
+    print(".\n");
+
+    say(&HALF);
+    say(&MINUS);
+    say(&ONE);
+    say(&P.index());
+    let big = frac::from(1);
+    for _ in 0..30 { big = big * 1000; }
+    print(&tcon::emit(&(big / frac::from(1000000000000000000))));
+    print(".\n");
+
+    // arguments and signs, decided exactly both times: √2 lies between
+    // 1.4142 and 1.4143
+    say_arg(i);
+    say(&ARG_I.index());
+    say_arg(isq2 * (1 - i));
+    say_arg(1 + 2 * i);
+    say_sign(isq2 * 2 - 1.4142);
+    say_sign(isq2 * 2 - 1.4143);
+    say_sign(cyclo::<8>::zeta(1));
+    say(&BELOW);
+    print(".\n");
+    0
+}

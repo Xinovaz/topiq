@@ -1,0 +1,53 @@
+// expect: exit 0
+// stdout: <ab!cd> 7
+// `string`: text with operators, made from text wherever one is wanted.
+#unit classical
+
+struct Named { name: string, n: i32 }
+
+fn shout(s: string) -> string {
+    s + "!"
+}
+
+fn main() -> i32 {
+    let a: string = "ab";
+    let b: [char] = clone("cd");
+
+    // text on either side of an operator, and passed where a string is wanted
+    let s = "<" + shout(a) + b + ">";
+    if s != "<ab!cd>" { return 1; }
+    if !(s == "<ab!cd>") { return 2; }
+
+    // `+=` adds to the string where it is, even its own characters
+    let t: string = "xy";
+    t += t;
+    t += "z";
+    if t != "xyxyz" || t.len() != 5 { return 3; }
+
+    // ordered as `str::cmp` orders texts
+    let low: string = "apple";
+    if !(low < "apples") || !("b" > low) || low >= "apple!" || !(low <= "apple") { return 4; }
+
+    // indexing reads and writes characters
+    t[0] = 'X';
+    if t[0] != 'X' || t[1] != 'y' { return 5; }
+
+    // a copy, made with `clone`, has characters of its own
+    let u = clone(&t);
+    u[0] = 'Q';
+    if t[0] != 'X' { return 6; }
+
+    // the characters lent as a slice
+    if !str::eq(&s.chars, "<ab!cd>") { return 7; }
+    print(&s.chars);
+    print(" ");
+
+    // in a document a string is quoted text
+    let doc = tcon::emit(&Named { name: "hi \"you\"", n: 7 });
+    if !str::eq(&doc, "{ name: \"hi \\\"you\\\"\", n: 7 }") { return 8; }
+    let back = tcon::parse::<Named>(&doc).unwrap();
+    if back.name != "hi \"you\"" { return 9; }
+    print(&tcon::emit(&back.n));
+    print("\n");
+    0
+}

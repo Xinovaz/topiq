@@ -1,0 +1,2086 @@
+//! The `core` library: what every unit sees without importing anything.
+//!
+//! Its types, functions and constants are visible unqualified in every unit,
+//! and as `core::name`; so are the variants `Some`, `None`, `Ok` and `Err`.
+//! A unit's own declaration of the same name hides the library's for
+//! unqualified use.
+//!
+//! `print`, `eprint`, `exit`, `panic` and `abort` are not written here: they
+//! talk to the operating system, and an abort names the line that called it,
+//! so the compiler provides them.
+#unit classical
+
+//////////
+// TEXT //
+//////////
+
+/// Text that owns its characters. `==` and `!=` compare the characters, and
+/// `<`, `<=`, `>` and `>=` order texts as `str::cmp` does; `+` puts two texts
+/// end to end, and `+=` adds text to the end of a `string` where it is.
+/// `s[i]` is its `i`-th character, and `s.chars` all of them, as a `[char]`.
+///
+/// A string literal, a `*[char]` or a `[char]` becomes a `string` wherever
+/// one is wanted: a slice by copying its characters, an owned `[char]` by
+/// moving them. A `string` is moved as a `[char]` is, and `clone(&s)` copies
+/// it. `&s` is a view of its characters wherever a `*[char]` is wanted.
+struct string { chars: [char] }
+
+impl string {
+    /// The characters `text` refers to.
+    fn from(text: *const [char]) -> string {
+        __string_of(text)
+    }
+
+    /// How many characters it has.
+    fn len(self: *const string) -> usize {
+        self.chars.len()
+    }
+
+    fn $eq(self: *const string, o: *const string) -> bool {
+        __text_eq(&self.chars, &o.chars)
+    }
+
+    fn $ord(self: *const string, o: *const string) -> Ord {
+        __text_cmp(&self.chars, &o.chars)
+    }
+
+    fn $add(self: *const string, o: *const string) -> string {
+        let out = clone(self);
+        out += *o;
+        out
+    }
+
+    // `o` may be `self` itself, so its characters are read by index, each
+    // after the array they are added to has grown
+    fn $add_assign(self: *string, o: *const string) {
+        let n = o.chars.len();
+        self.chars.reserve(n);
+        for i in 0..n {
+            self.chars.push(o.chars[i]);
+        }
+    }
+
+    fn $index(self: *string, i: usize) -> *char {
+        &self.chars[i]
+    }
+
+    fn $index_rd(self: *const string, i: usize) -> *const char {
+        &self.chars[i]
+    }
+
+    fn $fmt(self: *const string, out: [char]) -> [char] {
+        for c in &self.chars {
+            out.push(*c);
+        }
+        out
+    }
+}
+
+/// What text becomes where a `string` is wanted: the compiler calls these.
+fn __string_of(text: *const [char]) -> string {
+    string { chars: clone(text) }
+}
+fn __string_of_chars(chars: [char]) -> string {
+    string { chars: chars }
+}
+
+/// Whether `a` and `b` are the same characters.
+fn __text_eq(a: *const [char], b: *const [char]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+/// How `a` and `b` compare, character by character by scalar value, a text
+/// coming before every longer one that starts with it.
+fn __text_cmp(a: *const [char], b: *const [char]) -> Ord {
+    let n = if a.len() < b.len() { a.len() } else { b.len() };
+    for i in 0..n {
+        if a[i] < b[i] {
+            return Ord::Lt;
+        }
+        if a[i] > b[i] {
+            return Ord::Gt;
+        }
+    }
+    if a.len() < b.len() {
+        Ord::Lt
+    } else if a.len() > b.len() {
+        Ord::Gt
+    } else {
+        Ord::Eq
+    }
+}
+
+///////////////////////////
+// OPTIONALS AND RESULTS //
+///////////////////////////
+
+/// A value that may be absent. `T?` is another way to write `Opt<T>`.
+enum Opt<T> { Some(T), None }
+
+/// The outcome of something that can fail: a value, or why there is none.
+enum Result<T, E> { Ok(T), Err(E) }
+
+impl Opt<T> {
+    fn is_some(self: *const Opt<T>) -> bool {
+        match self {
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    fn is_none(self: *const Opt<T>) -> bool {
+        match self {
+            Some(_) => false,
+            None => true,
+        }
+    }
+
+    fn unwrap_or(self: Opt<T>, fallback: T) -> T {
+        match self {
+            Some(x) => x,
+            None => fallback,
+        }
+    }
+
+    fn unwrap_or_else(self: Opt<T>, f: *closure<fn() -> T>) -> T {
+        match self {
+            Some(x) => x,
+            None => f(),
+        }
+    }
+
+    fn ok_or<E>(self: Opt<T>, e: E) -> Result<T, E> {
+        match self {
+            Some(x) => Ok(x),
+            None => Err(e),
+        }
+    }
+
+    fn map<U>(self: Opt<T>, f: *closure<fn(T) -> U>) -> Opt<U> {
+        match self {
+            Some(x) => Some(f(x)),
+            None => None,
+        }
+    }
+
+    fn and_then<U>(self: Opt<T>, f: *closure<fn(T) -> Opt<U>>) -> Opt<U> {
+        match self {
+            Some(x) => f(x),
+            None => None,
+        }
+    }
+}
+
+impl Result<T, E> {
+    fn is_ok(self: *const Result<T, E>) -> bool {
+        match self {
+            Ok(_) => true,
+            Err(_) => false,
+        }
+    }
+
+    fn is_err(self: *const Result<T, E>) -> bool {
+        match self {
+            Ok(_) => false,
+            Err(_) => true,
+        }
+    }
+
+    fn unwrap_or(self: Result<T, E>, fallback: T) -> T {
+        match self {
+            Ok(x) => x,
+            Err(_) => fallback,
+        }
+    }
+
+    fn unwrap_or_else(self: Result<T, E>, f: *closure<fn(E) -> T>) -> T {
+        match self {
+            Ok(x) => x,
+            Err(e) => f(e),
+        }
+    }
+
+    fn ok(self: Result<T, E>) -> Opt<T> {
+        match self {
+            Ok(x) => Some(x),
+            Err(_) => None,
+        }
+    }
+
+    fn map<U>(self: Result<T, E>, f: *closure<fn(T) -> U>) -> Result<U, E> {
+        match self {
+            Ok(x) => Ok(f(x)),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn and_then<U>(self: Result<T, E>, f: *closure<fn(T) -> Result<U, E>>) -> Result<U, E> {
+        match self {
+            Ok(x) => f(x),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+//////////////
+// ORDERING //
+//////////////
+
+/// How two values compare: what `$ord` returns.
+enum Ord { Lt, Eq, Gt }
+
+///////////////////
+// INTROSPECTION //
+///////////////////
+
+/// What kind of type a type is, as `@kind_of` answers.
+enum TypeKind {
+    Scalar, Struct, Enum, Array, DynArray, Ref, Fn, Closure, Circuit, Qubit, Map, Locale,
+    Tuple, Slice, Dyn, Void,
+}
+
+/// A type's run-time type information: one table per type per program, so
+/// that two tables are the same type when they are at one address or,
+/// between the program and a module loaded into it (which has tables of its
+/// own), when they have one qualified name, as `__same_type` compares them.
+/// `@typeinfo(T)` gives `T`'s, and a reference carries its referent's. A
+/// structure's `fields` are its fields, and a tuple's its elements; a
+/// function type's are its parameters, then its result, named `return`.
+struct TypeInfo {
+    name: *[char],
+    size: usize,
+    align: usize,
+    kind: TypeKind,
+    fields: *[FieldInfo],
+    methods: *[MethodInfo],
+    variants: *[VariantInfo],
+    annots: *[AnnotInfo],
+    quantum: bool,
+    /// What destroys a value of the type, given its address; null for a type
+    /// with nothing to destroy.
+    drop: *void,
+    /// For an array, fixed or growable, or a slice, the table of its
+    /// elements, and for a fixed array how many there are; otherwise null
+    /// and 0.
+    elem: *const TypeInfo,
+    len: usize,
+    /// For an enumeration, where its tag is and how many bytes it takes. The
+    /// tag of the variant listed at `i` in `variants` is `i`.
+    tag_offset: usize,
+    tag_size: usize,
+}
+
+/// A field: its name, its type, and where it is from the start of the value.
+struct FieldInfo { name: *[char], ty: *const TypeInfo, offset: usize }
+
+/// A method: its name, its signature with the receiver erased to `*any`, and
+/// its code, which `invoke` calls after checking the signature. `call` is the
+/// same method taking its arguments as `dyn` values, which `dyn::call` uses;
+/// it is null for a method with an argument that cannot be copied out of one.
+struct MethodInfo { name: *[char], sig: *const TypeInfo, addr: *void, call: *void }
+
+/// A variant of an enumeration.
+struct VariantInfo { name: *[char], fields: *[FieldInfo] }
+
+/// An annotation written on the type: its name, and its argument where that
+/// is a single name, as `open` is in `[tcon: open]`, or else no characters.
+struct AnnotInfo { name: *[char], value: *[char] }
+
+/// Whether two tables describe one type: the same table, or tables of one
+/// qualified name, one of them a loaded module's. Loading a module checks
+/// that each type it shares with the program is laid out the same, so the
+/// name decides. A blank table, with no name, is no type.
+fn __same_type(a: *const TypeInfo, b: *const TypeInfo) -> bool {
+    a == b || (a.name.len() > 0 && __text_eq(a.name, b.name))
+}
+
+// `*a == *b` for two tables asks whether they describe one type, as
+// `__same_type` decides; `a == b` asks only whether they are one table.
+impl TypeInfo {
+    fn $eq(self: *const TypeInfo, o: *const TypeInfo) -> bool {
+        __same_type(self, o)
+    }
+}
+
+////////////
+// RANGES //
+////////////
+
+/// `a..b` and `a..=b` as values.
+struct Range<T> { start: T, end: T, inclusive: bool }
+
+impl Range<T> {
+    fn contains(self: *const Range<T>, x: T) -> bool {
+        if self.inclusive { self.start <= x && x <= self.end } else { self.start <= x && x < self.end }
+    }
+
+    fn $iter(self: Range<T>) -> RangeIter<T> {
+        RangeIter { next: self.start, end: self.end, inclusive: self.inclusive, done: false }
+    }
+}
+
+/// Goes through a range once. It stops at the end without computing a value
+/// past it, so a range ending at its type's maximum does not overflow.
+struct RangeIter<T> { next: T, end: T, inclusive: bool, done: bool }
+
+impl RangeIter<T> {
+    fn $next(self: *RangeIter<T>) -> Opt<T> {
+        if self.done {
+            return None;
+        }
+        if self.next < self.end {
+            return Some(self.next++);
+        }
+        self.done = true;
+        if self.inclusive && self.next == self.end { Some(self.next) } else { None }
+    }
+}
+
+///////////////////
+//
+// Growable arrays:
+//   `push`, `pop`, `reserve`, `clear`, `truncate`, `len` and `as_ref` are the
+//   compiler's, since they work on the array where it is.
+//
+// The higher-order operations are written here: `xs.map(f)` is `__map(&xs, f)`,
+// and so on. `f` is anything that can be called (a function, a closure, or a
+// reference to either). The `_copy` forms are for an `f` that takes elements by
+// value, which it may when they can be copied.
+//
+///////////////////
+
+static fn __map<T, U, F>(xs: *[T], f: F) -> [U] {
+    let out: [U] = [];
+    out.reserve(xs.len());
+    for x in xs { out.push(f(x)); }
+    out
+}
+
+static fn __map_copy<T, U, F>(xs: *const [T], f: F) -> [U] {
+    let out: [U] = [];
+    out.reserve(xs.len());
+    for x in xs { out.push(f(*x)); }
+    out
+}
+
+/// Keeps the elements `f` accepts, in order; the array is used up, and the
+/// elements `f` refuses are destroyed.
+static fn __filter<T, F>(xs: [T], f: F) -> [T] {
+    let out: [T] = [];
+    for x in xs {
+        if f(&x) { out.push(x); }
+    }
+    out
+}
+
+static fn __filter_copy<T, F>(xs: [T], f: F) -> [T] {
+    let out: [T] = [];
+    for x in xs {
+        if f(x) { out.push(x); }
+    }
+    out
+}
+
+static fn __fold<T, A, F>(xs: *[T], init: A, f: F) -> A {
+    let acc = init;
+    for x in xs { acc = f(acc, x); }
+    acc
+}
+
+static fn __fold_copy<T, A, F>(xs: *const [T], init: A, f: F) -> A {
+    let acc = init;
+    for x in xs { acc = f(acc, *x); }
+    acc
+}
+
+/// Goes through a growable array by value, moving each element out; `for x in
+/// xs` on a `[T]` uses one. If the loop ends early, the elements not yet
+/// reached are destroyed with it.
+struct Drain<T> { xs: [T], at: usize }
+
+impl Drain<T> {
+    fn $next(self: *Drain<T>) -> Opt<T> {
+        if self.at == self.xs.len() {
+            return None;
+        }
+        Some(self.xs.__take(self.at++))
+    }
+
+    /// The elements moved out are forgotten, so that destroying the array
+    /// destroys only the rest.
+    fn $drop(self: *Drain<T>) {
+        self.xs.__forget_front(self.at);
+    }
+}
+
+static fn __drain<T>(xs: [T]) -> Drain<T> { Drain { xs: xs, at: 0 } }
+
+////////////////////////
+// ENDING THE PROGRAM //
+////////////////////////
+
+/// The identifier an abort reports.
+enum AbortCode {
+    RA01, RA02, RA03, RA04, RA05, RA06, RA07, RA08, RA09, RA10, RA11,
+}
+
+///////////////////
+//
+// Total arithmetic:
+//   The operators abort on overflow. These say instead what should happen, at
+//   the point where it happens, and never abort.
+//
+// `T` is an integer type.
+//
+///////////////////
+
+fn overflowing_add<T>(a: T, b: T) -> (T, bool) { __overflowing_add(a, b) }
+fn overflowing_sub<T>(a: T, b: T) -> (T, bool) { __overflowing_sub(a, b) }
+fn overflowing_mul<T>(a: T, b: T) -> (T, bool) { __overflowing_mul(a, b) }
+fn overflowing_shl<T>(a: T, b: T) -> (T, bool) { __overflowing_shl(a, b) }
+fn overflowing_shr<T>(a: T, b: T) -> (T, bool) { __overflowing_shr(a, b) }
+fn overflowing_neg<T>(a: T) -> (T, bool) { __overflowing_neg(a) }
+
+fn wrapping_add<T>(a: T, b: T) -> T { let (r, _) = __overflowing_add(a, b); r }
+fn wrapping_sub<T>(a: T, b: T) -> T { let (r, _) = __overflowing_sub(a, b); r }
+fn wrapping_mul<T>(a: T, b: T) -> T { let (r, _) = __overflowing_mul(a, b); r }
+fn wrapping_shl<T>(a: T, b: T) -> T { let (r, _) = __overflowing_shl(a, b); r }
+fn wrapping_shr<T>(a: T, b: T) -> T { let (r, _) = __overflowing_shr(a, b); r }
+fn wrapping_neg<T>(a: T) -> T { let (r, _) = __overflowing_neg(a); r }
+
+/// The bits of `a` moved `k` places towards the most significant end, those
+/// pushed off it coming back in at the other. `k` counts modulo the width.
+fn rotate_left<T>(a: T, k: u32) -> T {
+    let w = (@sizeof(T) * 8) as u32;
+    let k = k % w;
+    if k == 0 { return a; }
+    let high = wrapping_shl(a, k as T);
+    // the shift fills a signed value with its sign, which the mask clears
+    let mask = wrapping_sub(wrapping_shl(1 as T, k as T), 1 as T);
+    high | (wrapping_shr(a, (w - k) as T) & mask)
+}
+
+/// The bits of `a` moved `k` places towards the least significant end.
+fn rotate_right<T>(a: T, k: u32) -> T {
+    let w = (@sizeof(T) * 8) as u32;
+    rotate_left(a, w - k % w)
+}
+
+fn saturating_add<T>(a: T, b: T) -> T { __saturating_add(a, b) }
+fn saturating_sub<T>(a: T, b: T) -> T { __saturating_sub(a, b) }
+fn saturating_mul<T>(a: T, b: T) -> T { __saturating_mul(a, b) }
+
+fn checked_add<T>(a: T, b: T) -> T? { let (r, o) = __overflowing_add(a, b); if o { None } else { Some(r) } }
+fn checked_sub<T>(a: T, b: T) -> T? { let (r, o) = __overflowing_sub(a, b); if o { None } else { Some(r) } }
+fn checked_mul<T>(a: T, b: T) -> T? { let (r, o) = __overflowing_mul(a, b); if o { None } else { Some(r) } }
+
+/// `None` for a zero divisor, and for the one quotient that does not fit.
+fn checked_div<T>(a: T, b: T) -> T? {
+    if b == 0 { return None; }
+    let (r, o) = __overflowing_div(a, b);
+    if o { None } else { Some(r) }
+}
+
+fn checked_rem<T>(a: T, b: T) -> T? {
+    if b == 0 { return None; }
+    let (r, o) = __overflowing_rem(a, b);
+    if o { None } else { Some(r) }
+}
+
+/// Keeps the low bits of `a` that fit in `U`.
+fn truncate<T, U>(a: T) -> U { __truncate(a) }
+
+/// `a` clamped to `U`'s range. From a floating value, NaN becomes zero and an
+/// infinity the bound on its side.
+fn saturating_as<T, U>(a: T) -> U { __saturating_as(a) }
+
+/////////////
+// GENERAL //
+/////////////
+
+/// Takes a value and lets it go.
+fn drop<T>(x: T) { }
+
+/// A copy of `v` that shares nothing with it: a growable array gets a buffer
+/// of its own, holding a clone of each element, and a type with `$copy` is
+/// copied by it. A value holding a closure cannot be cloned.
+fn clone<T>(v: *const T) -> T { __clone(v) }
+
+/// `^`, `&`, `|` and `!` on a `[bool; N]`, applied element by element.
+fn __bools_xor<N: const usize>(a: [bool; N], b: [bool; N]) -> [bool; N] {
+    for i in 0..N { a[i] ^= b[i]; }
+    a
+}
+fn __bools_and<N: const usize>(a: [bool; N], b: [bool; N]) -> [bool; N] {
+    for i in 0..N { a[i] &= b[i]; }
+    a
+}
+fn __bools_or<N: const usize>(a: [bool; N], b: [bool; N]) -> [bool; N] {
+    for i in 0..N { a[i] |= b[i]; }
+    a
+}
+fn __bools_not<N: const usize>(a: [bool; N]) -> [bool; N] {
+    for i in 0..N { a[i] = !a[i]; }
+    a
+}
+
+/// Exchanges what `a` and `b` refer to. Nothing is copied or destroyed, so it
+/// works for every type.
+fn swap<T>(a: *T, b: *T) { __exchange(a, b); }
+
+///////////////////
+//
+// Exact scalars:
+//   `frac`, `cyclo<N>`, `phase<N>` and `cplx<T>` never round.
+//
+// A `frac` is a ratio of integers of any size, kept in lowest terms with a
+// positive denominator. A `cyclo<N>` is an element of the field Q(ζ),
+// ζ = e^(2πi/N): its coefficients on 1, ζ, …, ζ^(d-1), d being how many k
+// below N share no factor with N, reduced by the N-th cyclotomic polynomial,
+// so that two are equal exactly when their coefficients are. A `phase<N>` is
+// the angle 2πm/N, m counted modulo N. A `cplx<T>` has real and imaginary
+// parts of type `T`. Dividing by zero aborts with RA02.
+//
+// Each is used by value like a number: `$copy` gives a copy of its own.
+// `adjoint(x)` of a `cyclo` or `cplx` is its complex conjugate, and of a
+// `frac`, as of an integer or a floating value, the number itself.
+//
+///////////////////
+
+/// An integer of any size: its sign, and its magnitude as digits in base
+/// 2^32, least significant first, with no zero digit at the top. Zero has no
+/// digits and no sign.
+struct __Int { neg: bool, mag: [u32] }
+
+/// A magnitude without zero digits at the top.
+fn __mag_trim(m: [u32]) -> [u32] {
+    while m.len() > 0 && m[m.len() - 1] == 0 {
+        m.pop();
+    }
+    m
+}
+
+/// -1, 0 or 1 as `a` is less than, equal to or greater than `b`.
+fn __mag_cmp(a: *const [u32], b: *const [u32]) -> i32 {
+    if a.len() != b.len() {
+        return if a.len() < b.len() { -1 } else { 1 };
+    }
+    let i = a.len();
+    while i > 0 {
+        i--;
+        if a[i] != b[i] {
+            return if a[i] < b[i] { -1 } else { 1 };
+        }
+    }
+    0
+}
+
+fn __mag_add(a: *const [u32], b: *const [u32]) -> [u32] {
+    let n = if a.len() > b.len() { a.len() } else { b.len() };
+    let out: [u32] = [];
+    let carry: u64 = 0;
+    for i in 0..n {
+        let x: u64 = if i < a.len() { a[i] as u64 } else { 0 };
+        let y: u64 = if i < b.len() { b[i] as u64 } else { 0 };
+        let s = x + y + carry;
+        out.push((s & 4294967295) as u32);
+        carry = s >> 32;
+    }
+    if carry > 0 {
+        out.push(carry as u32);
+    }
+    out
+}
+
+/// `a - b`, where `a` is at least `b`.
+fn __mag_sub(a: *const [u32], b: *const [u32]) -> [u32] {
+    let out: [u32] = [];
+    let borrow: u64 = 0;
+    for i in 0..a.len() {
+        let x = a[i] as u64;
+        let y: u64 = (if i < b.len() { b[i] as u64 } else { 0 }) + borrow;
+        if x >= y {
+            out.push((x - y) as u32);
+            borrow = 0;
+        } else {
+            out.push((x + 4294967296 - y) as u32);
+            borrow = 1;
+        }
+    }
+    __mag_trim(out)
+}
+
+fn __mag_mul(a: *const [u32], b: *const [u32]) -> [u32] {
+    if a.len() == 0 || b.len() == 0 {
+        return [];
+    }
+    let out: [u32] = [];
+    for _ in 0..(a.len() + b.len()) {
+        out.push(0);
+    }
+    for i in 0..a.len() {
+        let x = a[i] as u64;
+        let carry: u64 = 0;
+        for j in 0..b.len() {
+            let t = (out[i + j] as u64) + x * (b[j] as u64) + carry;
+            out[i + j] = (t & 4294967295) as u32;
+            carry = t >> 32;
+        }
+        let k = i + b.len();
+        while carry > 0 {
+            let t = (out[k] as u64) + carry;
+            out[k] = (t & 4294967295) as u32;
+            carry = t >> 32;
+            k++;
+        }
+    }
+    __mag_trim(out)
+}
+
+/// The quotient and remainder of `a` by the single digit `d`, not zero.
+fn __mag_divmod_small(a: *const [u32], d: u32) -> ([u32], u32) {
+    let q: [u32] = [];
+    for _ in 0..a.len() {
+        q.push(0);
+    }
+    let r: u64 = 0;
+    let i = a.len();
+    while i > 0 {
+        i--;
+        let cur = (r << 32) + (a[i] as u64);
+        q[i] = (cur / (d as u64)) as u32;
+        r = cur % (d as u64);
+    }
+    (__mag_trim(q), r as u32)
+}
+
+/// The quotient and remainder of `a` by `b`.
+fn __mag_divmod(a: *const [u32], b: *const [u32]) -> ([u32], [u32]) {
+    if b.len() == 1 {
+        let (q, r) = __mag_divmod_small(a, b[0]);
+        let rest: [u32] = [];
+        if r != 0 {
+            rest.push(r);
+        }
+        return (q, rest);
+    }
+    if __mag_cmp(a, b) < 0 {
+        let none: [u32] = [];
+        return (none, clone(a));
+    }
+    let q: [u32] = [];
+    for _ in 0..a.len() {
+        q.push(0);
+    }
+    let r: [u32] = [];
+    let i = a.len() * 32;
+    while i > 0 {
+        i--;
+        let bit = (a[i / 32] >> ((i % 32) as u32)) & 1;
+        r = __mag_shl1(&r, bit);
+        if __mag_cmp(&r, b) >= 0 {
+            r = __mag_sub(&r, b);
+            q[i / 32] |= (1 as u32) << ((i % 32) as u32);
+        }
+    }
+    (__mag_trim(q), r)
+}
+
+/// `m` doubled, plus `bit`.
+fn __mag_shl1(m: *const [u32], bit: u32) -> [u32] {
+    let out: [u32] = [];
+    let carry = bit;
+    for i in 0..m.len() {
+        out.push(((m[i] & 2147483647) << 1) | carry);
+        carry = m[i] >> 31;
+    }
+    if carry != 0 {
+        out.push(carry);
+    }
+    out
+}
+
+fn __mag_gcd(a: *const [u32], b: *const [u32]) -> [u32] {
+    let x: [u32] = clone(a);
+    let y: [u32] = clone(b);
+    while y.len() > 0 {
+        let (_, r) = __mag_divmod(&x, &y);
+        x = y;
+        y = r;
+    }
+    x
+}
+
+fn __int(neg: bool, mag: [u32]) -> __Int {
+    let zero = mag.len() == 0;
+    __Int { neg: neg && !zero, mag: mag }
+}
+
+fn __int_from(n: i64) -> __Int {
+    let mag: [u32] = [];
+    // one less than the magnitude cannot overflow, even for the least value
+    let m: u64 = if n < 0 { ((-(n + 1)) as u64) + 1 } else { n as u64 };
+    while m > 0 {
+        mag.push((m & 4294967295) as u32);
+        m >>= 32;
+    }
+    __int(n < 0, mag)
+}
+
+impl __Int {
+    fn $copy(self: *const __Int) -> __Int {
+        __Int { neg: self.neg, mag: clone(&self.mag) }
+    }
+
+    fn $add(self: *const __Int, o: *const __Int) -> __Int {
+        if self.neg == o.neg {
+            return __int(self.neg, __mag_add(&self.mag, &o.mag));
+        }
+        if __mag_cmp(&self.mag, &o.mag) >= 0 {
+            __int(self.neg, __mag_sub(&self.mag, &o.mag))
+        } else {
+            __int(o.neg, __mag_sub(&o.mag, &self.mag))
+        }
+    }
+
+    fn $sub(self: *const __Int, o: *const __Int) -> __Int {
+        *self + -*o
+    }
+
+    fn $neg(self: *const __Int) -> __Int {
+        __int(!self.neg, clone(&self.mag))
+    }
+
+    fn $mul(self: *const __Int, o: *const __Int) -> __Int {
+        __int(self.neg != o.neg, __mag_mul(&self.mag, &o.mag))
+    }
+
+    // zero has no sign, so equal integers have equal signs
+    fn $eq(self: *const __Int, o: *const __Int) -> bool {
+        self.neg == o.neg && __mag_cmp(&self.mag, &o.mag) == 0
+    }
+
+    fn $ord(self: *const __Int, o: *const __Int) -> Ord {
+        if self.neg != o.neg {
+            return if self.neg { Ord::Lt } else { Ord::Gt };
+        }
+        // the larger magnitude is the larger integer, unless both are negative
+        let (a, b) = if self.neg { (&o.mag, &self.mag) } else { (&self.mag, &o.mag) };
+        let c = __mag_cmp(a, b);
+        if c < 0 { Ord::Lt } else if c > 0 { Ord::Gt } else { Ord::Eq }
+    }
+}
+
+fn __int_to_f64(a: *const __Int) -> f64 {
+    let x = 0.0;
+    let i = a.mag.len();
+    while i > 0 {
+        i--;
+        x = x * 4294967296.0 + (a.mag[i] as f64);
+    }
+    if a.neg { -x } else { x }
+}
+
+/// `out` with `a` in decimal after it.
+fn __int_text(a: *const __Int, out: [char]) -> [char] {
+    if a.mag.len() == 0 {
+        out.push('0');
+        return out;
+    }
+    if a.neg {
+        out.push('-');
+    }
+    // nine decimal digits at a time, least significant first
+    let groups: [u32] = [];
+    let m: [u32] = clone(&a.mag);
+    while m.len() > 0 {
+        let (q, r) = __mag_divmod_small(&m, 1000000000);
+        groups.push(r);
+        m = q;
+    }
+    let i = groups.len();
+    let first = true;
+    while i > 0 {
+        i--;
+        let digits: [char] = [];
+        let v = groups[i];
+        for _ in 0..9 {
+            digits.push(((48 + v % 10) as u32) as char);
+            v /= 10;
+        }
+        let k = 9;
+        if first {
+            while k > 1 && digits[k - 1] == '0' {
+                k--;
+            }
+            first = false;
+        }
+        while k > 0 {
+            k--;
+            out.push(digits[k]);
+        }
+    }
+    out
+}
+
+/// A ratio of integers of any size, in lowest terms, with a positive
+/// denominator. Zero is 0/1.
+struct frac { num: __Int, den: __Int }
+
+/// `num / den` in lowest terms, `den` not zero.
+fn __frac(num: __Int, den: __Int) -> frac {
+    if num.mag.len() == 0 {
+        return frac { num: __int_from(0), den: __int_from(1) };
+    }
+    let g = __mag_gcd(&num.mag, &den.mag);
+    let (n, _) = __mag_divmod(&num.mag, &g);
+    let (d, _) = __mag_divmod(&den.mag, &g);
+    frac { num: __int(num.neg != den.neg, n), den: __int(false, d) }
+}
+
+impl frac {
+    /// `n / d`; `d` zero aborts with RA02.
+    fn of(n: i64, d: i64) -> frac {
+        if d == 0 {
+            abort(AbortCode::RA02, "a fraction with denominator zero");
+        }
+        __frac(__int_from(n), __int_from(d))
+    }
+
+    /// The integer `n`.
+    fn from(n: i64) -> frac {
+        frac { num: __int_from(n), den: __int_from(1) }
+    }
+
+    fn is_zero(self: *const frac) -> bool {
+        self.num.mag.len() == 0
+    }
+
+    fn $copy(self: *const frac) -> frac {
+        frac { num: self.num, den: self.den }
+    }
+
+    /// A real number is its own adjoint.
+    fn $adj(self: *const frac) -> frac {
+        *self
+    }
+
+    fn $add(self: *const frac, o: *const frac) -> frac {
+        __frac(self.num * o.den + o.num * self.den, self.den * o.den)
+    }
+
+    fn $sub(self: *const frac, o: *const frac) -> frac {
+        __frac(self.num * o.den - o.num * self.den, self.den * o.den)
+    }
+
+    fn $mul(self: *const frac, o: *const frac) -> frac {
+        __frac(self.num * o.num, self.den * o.den)
+    }
+
+    fn $div(self: *const frac, o: *const frac) -> frac {
+        if o.is_zero() {
+            abort(AbortCode::RA02, "division of a fraction by zero");
+        }
+        __frac(self.num * o.den, self.den * o.num)
+    }
+
+    fn $neg(self: *const frac) -> frac {
+        frac { num: -self.num, den: self.den }
+    }
+
+    // both are in lowest terms, with positive denominators
+    fn $eq(self: *const frac, o: *const frac) -> bool {
+        self.num == o.num && self.den == o.den
+    }
+
+    fn $ord(self: *const frac, o: *const frac) -> Ord {
+        let (a, b) = (self.num * o.den, o.num * self.den);
+        if a < b { Ord::Lt } else if a > b { Ord::Gt } else { Ord::Eq }
+    }
+
+    /// `1 / self`, or `None` for zero.
+    fn inv(self: *const frac) -> frac? {
+        if self.is_zero() {
+            return None;
+        }
+        Some(__frac(self.den, self.num))
+    }
+
+    /// Near to the value: what `as f64` gives.
+    fn to_f64(self: *const frac) -> f64 {
+        __int_to_f64(&self.num) / __int_to_f64(&self.den)
+    }
+
+    /// `out` with `n` or `n/d` after it.
+    fn text(self: *const frac, out: [char]) -> [char] {
+        let out = __int_text(&self.num, out);
+        if !(self.den.mag.len() == 1 && self.den.mag[0] == 1) {
+            out.push('/');
+            out = __int_text(&self.den, out);
+        }
+        out
+    }
+
+    fn $fmt(self: *const frac, out: [char]) -> [char] {
+        self.text(out)
+    }
+}
+
+/// How many k in 1..=n share no factor with n: the degree of the n-th
+/// cyclotomic polynomial, and how many coefficients a `cyclo<n>` has.
+fn __totient(n: usize) -> usize {
+    let result = n;
+    let m = n;
+    let p = 2;
+    while p * p <= m {
+        if m % p == 0 {
+            while m % p == 0 {
+                m /= p;
+            }
+            result -= result / p;
+        }
+        p++;
+    }
+    if m > 1 {
+        result -= result / m;
+    }
+    result
+}
+
+/// The Möbius function: 0 if `n` has a squared factor, otherwise 1 or -1 as
+/// it has an even or odd number of prime factors.
+fn __mobius(n: usize) -> i64 {
+    let m = n;
+    let sign: i64 = 1;
+    let p = 2;
+    while p * p <= m {
+        if m % p == 0 {
+            m /= p;
+            if m % p == 0 {
+                return 0;
+            }
+            sign = -sign;
+        }
+        p++;
+    }
+    if m > 1 { -sign } else { sign }
+}
+
+/// The coefficients of the n-th cyclotomic polynomial, constant term first:
+/// the product over the divisors d of n of (x^d - 1) raised to the Möbius
+/// function of n/d. Its coefficients are integers, and small for every
+/// conductor a program can use.
+fn __cyclotomic(n: usize) -> [i64] {
+    let p: [i64] = [];
+    p.push(1);
+    // the factors raised to 1 first, so each division is exact
+    for d in 1..(n + 1) {
+        if n % d == 0 && __mobius(n / d) == 1 {
+            let q: [i64] = [];
+            for _ in 0..(p.len() + d) {
+                q.push(0);
+            }
+            for i in 0..p.len() {
+                q[i + d] += p[i];
+                q[i] -= p[i];
+            }
+            p = q;
+        }
+    }
+    for d in 1..(n + 1) {
+        if n % d == 0 && __mobius(n / d) == -1 {
+            // p = q (x^d - 1), so p[i] = q[i - d] - q[i]
+            let len = p.len() - d;
+            let q: [i64] = [];
+            for i in 0..len {
+                let back = if i >= d { q[i - d] } else { 0 };
+                q.push(back - p[i]);
+            }
+            p = q;
+        }
+    }
+    p
+}
+
+fn __frac_zeros(k: usize) -> [frac] {
+    let out: [frac] = [];
+    for _ in 0..k {
+        out.push(frac::from(0));
+    }
+    out
+}
+
+/// The power-basis coefficients `raw` reduced by the n-th cyclotomic
+/// polynomial to exactly as many as a `cyclo<n>` has.
+fn __cyclo_reduce(raw: [frac], n: usize) -> [frac] {
+    let d = __totient(n);
+    while raw.len() < d {
+        raw.push(frac::from(0));
+    }
+    if raw.len() > d {
+        let m = __cyclotomic(n);
+        // the polynomial is monic: each step takes away a shifted copy
+        let i = raw.len();
+        while i > d {
+            i--;
+            if !raw[i].is_zero() {
+                let lead = raw[i];
+                raw[i] = frac::from(0);
+                let shift = i - d;
+                for j in 0..d {
+                    raw[shift + j] -= lead * frac::from(m[j]);
+                }
+            }
+        }
+        raw.truncate(d);
+    }
+    raw
+}
+
+/// A polynomial over the fractions without zero terms at the top, keeping
+/// at least one term.
+fn __poly_trim(p: [frac]) -> [frac] {
+    while p.len() > 1 && p[p.len() - 1].is_zero() {
+        p.pop();
+    }
+    if p.len() == 0 {
+        p.push(frac::from(0));
+    }
+    p
+}
+
+fn __poly_is_zero(p: *const [frac]) -> bool {
+    for c in p {
+        if !c.is_zero() {
+            return false;
+        }
+    }
+    true
+}
+
+/// The index of the last term that is not zero, or 0.
+fn __poly_degree(p: *const [frac]) -> usize {
+    let i = p.len();
+    while i > 0 {
+        i--;
+        if !p[i].is_zero() {
+            return i;
+        }
+    }
+    0
+}
+
+fn __poly_mul(a: *const [frac], b: *const [frac]) -> [frac] {
+    let out = __frac_zeros(a.len() + b.len());
+    for i in 0..a.len() {
+        if !a[i].is_zero() {
+            for j in 0..b.len() {
+                out[i + j] += a[i] * b[j];
+            }
+        }
+    }
+    __poly_trim(out)
+}
+
+fn __poly_sub(a: *const [frac], b: *const [frac]) -> [frac] {
+    let n = if a.len() > b.len() { a.len() } else { b.len() };
+    let out: [frac] = [];
+    for i in 0..n {
+        let x = if i < a.len() { a[i] } else { frac::from(0) };
+        let y = if i < b.len() { b[i] } else { frac::from(0) };
+        out.push(x - y);
+    }
+    __poly_trim(out)
+}
+
+/// The quotient and remainder of `a` by `b`.
+fn __poly_divmod(a: *const [frac], b: *const [frac]) -> ([frac], [frac]) {
+    let divisor = __poly_trim(clone(b));
+    let rem = __poly_trim(clone(a));
+    let db = __poly_degree(&divisor);
+    let quot = __frac_zeros(1);
+    if __poly_is_zero(&rem) || __poly_degree(&rem) < db {
+        return (quot, rem);
+    }
+    quot = __frac_zeros(__poly_degree(&rem) - db + 1);
+    let lead = divisor[db];
+    while !__poly_is_zero(&rem) && __poly_degree(&rem) >= db {
+        let dr = __poly_degree(&rem);
+        let coeff = rem[dr] / lead;
+        let shift = dr - db;
+        quot[shift] = coeff;
+        let sub = __frac_zeros(shift);
+        for c in &divisor {
+            sub.push(*c * coeff);
+        }
+        rem = __poly_sub(&rem, &sub);
+    }
+    (__poly_trim(quot), rem)
+}
+
+/// The inverse of `a` modulo the n-th cyclotomic polynomial, which is
+/// irreducible, so every `a` that is not zero has one.
+fn __poly_inverse(a: *const [frac], n: usize) -> [frac] {
+    let modulus: [frac] = [];
+    for c in &__cyclotomic(n) {
+        modulus.push(frac::from(*c));
+    }
+    let old_r = modulus;
+    let r = __poly_trim(clone(a));
+    let old_s = __frac_zeros(1);
+    let s: [frac] = [];
+    s.push(frac::from(1));
+    while !__poly_is_zero(&r) {
+        let (q, rem) = __poly_divmod(&old_r, &r);
+        old_r = r;
+        r = rem;
+        let new_s = __poly_sub(&old_s, &__poly_mul(&q, &s));
+        old_s = s;
+        s = new_s;
+    }
+    // `old_r` is a non-zero constant: the greatest common divisor
+    let scale = frac::from(1) / old_r[0];
+    let out: [frac] = [];
+    for c in &old_s {
+        out.push(*c * scale);
+    }
+    out
+}
+
+/// An element of the field Q(ζ), ζ = e^(2πi/N), by its coefficients on the
+/// powers of ζ.
+struct cyclo<N: const usize> { c: [frac] }
+
+impl cyclo<N> {
+    fn zero() -> cyclo<N> {
+        cyclo { c: __frac_zeros(__totient(N)) }
+    }
+
+    /// The rational `x`.
+    fn of(x: *const frac) -> cyclo<N> {
+        let c = __frac_zeros(__totient(N));
+        c[0] = *x;
+        cyclo { c: c }
+    }
+
+    /// The integer `n`.
+    fn from(n: i64) -> cyclo<N> {
+        cyclo::<N>::of(&frac::from(n))
+    }
+
+    /// ζ^k, for any integer `k`.
+    fn zeta(k: i64) -> cyclo<N> {
+        let m = ((k % (N as i64)) + (N as i64)) % (N as i64);
+        let raw = __frac_zeros((m as usize) + 1);
+        raw[m as usize] = frac::from(1);
+        cyclo { c: __cyclo_reduce(raw, N) }
+    }
+
+    fn is_zero(self: *const cyclo<N>) -> bool {
+        __poly_is_zero(&self.c)
+    }
+
+    fn $copy(self: *const cyclo<N>) -> cyclo<N> {
+        cyclo { c: clone(&self.c) }
+    }
+
+    fn $add(self: *const cyclo<N>, o: *const cyclo<N>) -> cyclo<N> {
+        let c: [frac] = [];
+        for i in 0..self.c.len() {
+            c.push(self.c[i] + o.c[i]);
+        }
+        cyclo { c: c }
+    }
+
+    fn $sub(self: *const cyclo<N>, o: *const cyclo<N>) -> cyclo<N> {
+        let c: [frac] = [];
+        for i in 0..self.c.len() {
+            c.push(self.c[i] - o.c[i]);
+        }
+        cyclo { c: c }
+    }
+
+    fn $neg(self: *const cyclo<N>) -> cyclo<N> {
+        let c: [frac] = [];
+        for x in &self.c {
+            c.push(-*x);
+        }
+        cyclo { c: c }
+    }
+
+    fn $mul(self: *const cyclo<N>, o: *const cyclo<N>) -> cyclo<N> {
+        let raw = __frac_zeros(self.c.len() + o.c.len());
+        for i in 0..self.c.len() {
+            if !self.c[i].is_zero() {
+                for j in 0..o.c.len() {
+                    raw[i + j] += self.c[i] * o.c[j];
+                }
+            }
+        }
+        cyclo { c: __cyclo_reduce(raw, N) }
+    }
+
+    fn $div(self: *const cyclo<N>, o: *const cyclo<N>) -> cyclo<N> {
+        let inverse = match o.inv() {
+            Some(x) => x,
+            None => abort(AbortCode::RA02, "division by zero in a cyclotomic field"),
+        };
+        *self * inverse
+    }
+
+    fn $eq(self: *const cyclo<N>, o: *const cyclo<N>) -> bool {
+        for i in 0..self.c.len() {
+            if self.c[i] != o.c[i] {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// `1 / self`, or `None` for zero.
+    fn inv(self: *const cyclo<N>) -> cyclo<N>? {
+        if self.is_zero() {
+            return None;
+        }
+        let r: cyclo<N> = cyclo { c: __cyclo_reduce(__poly_inverse(&self.c, N), N) };
+        Some(r)
+    }
+
+    /// The adjoint.
+    fn $adj(self: *const cyclo<N>) -> cyclo<N> {
+        let raw = __frac_zeros(N);
+        for k in 0..self.c.len() {
+            raw[(N - k) % N] += self.c[k];
+        }
+        cyclo { c: __cyclo_reduce(raw, N) }
+    }
+
+    /// `self` times its conjugate: the square of its modulus, exactly.
+    fn norm2(self: *const cyclo<N>) -> cyclo<N> {
+        *self * adjoint(self)
+    }
+
+    /// The rational `self` is.
+    fn to_frac(self: *const cyclo<N>) -> frac? {
+        for i in 1..self.c.len() {
+            if !self.c[i].is_zero() {
+                return None;
+            }
+        }
+        Some(self.c[0])
+    }
+
+    /// Near to the value: what `as cplx<f64>` gives.
+    fn to_cplx(self: *const cyclo<N>) -> cplx<f64> {
+        let re = 0.0;
+        let im = 0.0;
+        for k in 0..self.c.len() {
+            let theta = 6.283185307179586 * (k as f64) / (N as f64);
+            let a = self.c[k].to_f64();
+            re += a * __cos(theta);
+            im += a * __sin(theta);
+        }
+        cplx { re: re, im: im }
+    }
+
+    /// Near to the real part: what `as f64` gives.
+    fn to_f64(self: *const cyclo<N>) -> f64 {
+        self.to_cplx().re
+    }
+
+    /// Which side of zero `self` lies on: `Lt`, `Eq` or `Gt`, decided
+    /// exactly. `None` when `self` is not real, and so on neither side.
+    fn sign(self: *const cyclo<N>) -> Ord? {
+        if *self != adjoint(self) {
+            return None;
+        }
+        Some(__real_sign(&self.c, N))
+    }
+
+    /// The argument, as a phase: the m for which ζ^(-m) times `self` is real
+    /// and positive. `None` for zero, which has no argument, and for a number
+    /// whose argument is no whole number of N-th parts of a turn.
+    fn arg(self: *const cyclo<N>) -> phase<N>? {
+        if self.is_zero() {
+            return None;
+        }
+        for m in 0..N {
+            let turned = *self * cyclo::<N>::zeta(-(m as i64));
+            match turned.sign() {
+                Some(Ord::Gt) => { return Some(phase::<N>::of(m as i64)); }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// `out` with the terms that are not zero after it, as `a + b·ζ^k`.
+    fn $fmt(self: *const cyclo<N>, out: [char]) -> [char] {
+        let first = true;
+        for k in 0..self.c.len() {
+            if !self.c[k].is_zero() {
+                let negative = self.c[k].num.neg;
+                let size = if negative { -self.c[k] } else { self.c[k] };
+                if first {
+                    if negative {
+                        out.push('-');
+                    }
+                } else {
+                    out.push(' ');
+                    out.push(if negative { '-' } else { '+' });
+                    out.push(' ');
+                }
+                first = false;
+                let one = size == frac::from(1);
+                if k == 0 || !one {
+                    out = size.text(out);
+                }
+                if k > 0 {
+                    if !one {
+                        out.push('·');
+                    }
+                    out.push('ζ');
+                    if k > 1 {
+                        out.push('^');
+                        out = __int_text(&__int_from(k as i64), out);
+                    }
+                }
+            }
+        }
+        if first {
+            out.push('0');
+        }
+        out
+    }
+}
+
+// The sign of a real cyclotomic number:
+//   Order is not algebraic: whether a real element of Q(ζ) is positive
+//   depends on where ζ sits in the plane. The value is a sum of rational
+//   multiples of cosines of rational multiples of a turn, and each cosine is
+//   enclosed in a rational interval certain to hold it: π by Machin's
+//   formula, whose alternating series bound themselves, and the cosine by
+//   its Taylor series, with the next term bounding what is left. The
+//   intervals are narrowed until their sum excludes zero, which it does once
+//   they are narrow enough, the number not being zero. Nothing is rounded, so
+//   a sign computed as the program runs is the one translation computes.
+
+/// The sign of the real number whose coefficients on the powers of
+/// ζ = e^(2πi/n) are `c`.
+fn __real_sign(c: *const [frac], n: usize) -> Ord {
+    if __poly_is_zero(c) {
+        return Ord::Eq;
+    }
+    let zero = frac::from(0);
+    let bits: u32 = 48;
+    loop {
+        let (plo, phi) = __pi(bits);
+        let lo = zero;
+        let hi = zero;
+        for k in 0..c.len() {
+            if !c[k].is_zero() {
+                let (a, b) = __cos_turn(k, n, plo, phi, bits);
+                // a negative coefficient turns the interval round
+                if c[k] < zero {
+                    lo += c[k] * b;
+                    hi += c[k] * a;
+                } else {
+                    lo += c[k] * a;
+                    hi += c[k] * b;
+                }
+            }
+        }
+        if lo > zero {
+            return Ord::Gt;
+        }
+        if hi < zero {
+            return Ord::Lt;
+        }
+        bits *= 2;
+    }
+}
+
+/// 2^(-bits).
+fn __tolerance(bits: u32) -> frac {
+    let p = frac::from(1);
+    for _ in 0..bits {
+        p = p * frac::from(2);
+    }
+    frac::from(1) / p
+}
+
+/// arctan(1/m), enclosed in an interval at most 2·2^(-bits) wide.
+fn __arctan_inverse(m: i64, bits: u32) -> (frac, frac) {
+    let eps = __tolerance(bits);
+    let m2 = frac::from(m * m);
+    let power = frac::of(1, m);
+    let sum = frac::from(0);
+    let j: i64 = 0;
+    loop {
+        let term = power / frac::from(2 * j + 1);
+        if j % 2 == 0 {
+            sum = sum + term;
+        } else {
+            sum = sum - term;
+        }
+        power = power / m2;
+        j++;
+        let next = power / frac::from(2 * j + 1);
+        if next < eps {
+            // an alternating series with shrinking terms is within its next
+            // term of its sum
+            return (sum - next, sum + next);
+        }
+    }
+}
+
+/// π, enclosed in an interval about 2^(-bits) wide.
+fn __pi(bits: u32) -> (frac, frac) {
+    let (alo, ahi) = __arctan_inverse(5, bits + 6);
+    let (blo, bhi) = __arctan_inverse(239, bits + 6);
+    let sixteen = frac::from(16);
+    let four = frac::from(4);
+    (alo * sixteen - bhi * four, ahi * sixteen - blo * four)
+}
+
+/// cos(2π·k/n), enclosed in an interval, π lying in [plo, phi].
+fn __cos_turn(k: usize, n: usize, plo: frac, phi: frac, bits: u32) -> (frac, frac) {
+    // the angle reduced to [0, π/2] by the symmetries of the cosine, exactly
+    let q = frac::of((k % n) as i64, n as i64);
+    let half = frac::of(1, 2);
+    if q > half {
+        q = frac::from(1) - q;
+    }
+    let negate = false;
+    if q > frac::of(1, 4) {
+        q = half - q;
+        negate = true;
+    }
+    // θ = 2πq, enclosed; the cosine is taken at the middle of the enclosure,
+    // and moves by at most the enclosure's half-width across it
+    let twice = q * frac::from(2);
+    let tlo = plo * twice;
+    let thi = phi * twice;
+    let mid = (tlo + thi) * half;
+    let spread = (thi - tlo) * half;
+    let eps = __tolerance(bits);
+    let x2 = mid * mid;
+    let term = frac::from(1);
+    let sum = frac::from(1);
+    let j: i64 = 1;
+    loop {
+        term = -(term * x2) / frac::from((2 * j - 1) * (2 * j));
+        sum = sum + term;
+        j++;
+        let next = term * x2 / frac::from((2 * j - 1) * (2 * j));
+        if next < frac::from(0) {
+            next = -next;
+        }
+        if next < eps {
+            let r = next + spread;
+            if negate {
+                return (-(sum + r), -(sum - r));
+            }
+            return (sum - r, sum + r);
+        }
+    }
+}
+
+/// The integer `n` as a `cyclo<N>`: what `n as cyclo<N>` is.
+fn __cyclo_int<N: const usize>(n: i64) -> cyclo<N> {
+    cyclo::<N>::from(n)
+}
+
+/// The integer `n` as a `cplx<T>`: what `n as cplx<T>` is.
+fn __cplx_int<T>(n: i64) -> cplx<T> {
+    cplx { re: n as T, im: 0 as T }
+}
+
+/// `x` in the larger field Q(ζ_N), M dividing N: ζ_M is ζ_N^(N/M).
+fn __cyclo_widen<M: const usize, N: const usize>(x: *const cyclo<M>) -> cyclo<N> {
+    let raw = __frac_zeros(N);
+    let step = N / M;
+    for k in 0..x.c.len() {
+        raw[k * step] = x.c[k];
+    }
+    cyclo { c: __cyclo_reduce(raw, N) }
+}
+
+/// The angle 2πm/N.
+struct phase<N: const usize> { m: usize }
+
+impl phase<N> {
+    /// The angle 2πk/N; `k` outside 0..N aborts with RA09.
+    fn of(k: i64) -> phase<N> {
+        if k < 0 || k >= (N as i64) {
+            abort(AbortCode::RA09, "a phase outside the phase group");
+        }
+        phase { m: k as usize }
+    }
+
+    /// Which multiple of 2π/N this is, from 0 below N.
+    fn index(self: *const phase<N>) -> usize {
+        self.m
+    }
+
+    fn $copy(self: *const phase<N>) -> phase<N> {
+        phase { m: self.m }
+    }
+
+    fn $add(self: *const phase<N>, o: *const phase<N>) -> phase<N> {
+        phase { m: (self.m + o.m) % N }
+    }
+
+    fn $sub(self: *const phase<N>, o: *const phase<N>) -> phase<N> {
+        phase { m: (self.m + N - o.m) % N }
+    }
+
+    fn $neg(self: *const phase<N>) -> phase<N> {
+        phase { m: (N - self.m) % N }
+    }
+
+    fn $eq(self: *const phase<N>, o: *const phase<N>) -> bool {
+        self.m == o.m
+    }
+
+    fn $ord(self: *const phase<N>, o: *const phase<N>) -> Ord {
+        if self.m < o.m { Ord::Lt } else if self.m > o.m { Ord::Gt } else { Ord::Eq }
+    }
+
+    /// e^(2πim/N) as an element of the field.
+    fn to_cyclo(self: *const phase<N>) -> cyclo<N> {
+        cyclo::<N>::zeta(self.m as i64)
+    }
+
+    /// The angle in radians: what `as f64` gives.
+    fn to_f64(self: *const phase<N>) -> f64 {
+        6.283185307179586 * (self.m as f64) / (N as f64)
+    }
+}
+
+/// A complex number with parts of type `T`: `f32`, `f64` or `frac`.
+struct cplx<T> { re: T, im: T }
+
+impl cplx<T> {
+    fn of(re: T, im: T) -> cplx<T> {
+        cplx { re: re, im: im }
+    }
+
+    fn $copy(self: *const cplx<T>) -> cplx<T> {
+        cplx { re: self.re, im: self.im }
+    }
+
+    fn $add(self: *const cplx<T>, o: *const cplx<T>) -> cplx<T> {
+        cplx { re: self.re + o.re, im: self.im + o.im }
+    }
+
+    fn $sub(self: *const cplx<T>, o: *const cplx<T>) -> cplx<T> {
+        cplx { re: self.re - o.re, im: self.im - o.im }
+    }
+
+    fn $neg(self: *const cplx<T>) -> cplx<T> {
+        cplx { re: -self.re, im: -self.im }
+    }
+
+    fn $mul(self: *const cplx<T>, o: *const cplx<T>) -> cplx<T> {
+        cplx { re: self.re * o.re - self.im * o.im, im: self.re * o.im + self.im * o.re }
+    }
+
+    fn $div(self: *const cplx<T>, o: *const cplx<T>) -> cplx<T> {
+        let d = o.re * o.re + o.im * o.im;
+        let re = self.re * o.re + self.im * o.im;
+        let im = self.im * o.re - self.re * o.im;
+        cplx { re: re / d, im: im / d }
+    }
+
+    fn $eq(self: *const cplx<T>, o: *const cplx<T>) -> bool {
+        self.re == o.re && self.im == o.im
+    }
+
+    /// The adjoint.
+    fn $adj(self: *const cplx<T>) -> cplx<T> {
+        cplx { re: self.re, im: -self.im }
+    }
+
+    /// The square of the modulus.
+    fn norm2(self: *const cplx<T>) -> T {
+        self.re * self.re + self.im * self.im
+    }
+}
+
+///////////////////
+//
+// Linear algebra:
+//   `vec<T, N>` holds N elements and `mat<T, R, C>` R rows of C; `square<T, N>`
+//   is `mat<T, N, N>`. A `covec<T, N>` is a row of N elements, a linear form
+//   on `vec<T, N>`: as states, a vector is a ket and a covector a bra. The
+//   elements are numbers: integers, floating values, `frac`, `cyclo<N>` or
+//   `cplx<T>`.
+//
+// The shapes are part of the types, so multiplying matrices whose shapes do not
+// fit is refused during translation. `+` and `-` work element by element. `*`
+// multiplies two matrices, a matrix by a vector, a covector by a matrix, and
+// any of them by a number; a covector times a vector is a number, and a vector
+// times a covector a matrix. `**` is the Kronecker product. An array literal
+// becomes a vector, covector or matrix where one is wanted.
+//
+// `adjoint` gives the conjugate transpose: a vector's covector, a covector's
+// vector, and a matrix's conjugate transpose. So `adjoint(a) * b` is the inner
+// product <a|b>, `a * adjoint(b)` the outer product |a><b|, and
+// `adjoint(a) * m * b` the matrix element <a|m|b>.
+//
+///////////////////
+
+struct vec<T, N: const usize> { e: [T; N] }
+
+struct covec<T, N: const usize> { e: [T; N] }
+
+struct mat<T, R: const usize, C: const usize> { e: [[T; C]; R] }
+
+type square<T, N: const usize> = mat<T, N, N>;
+
+/// The number `n` as a `T`.
+fn __number<T>(n: i64) -> T {
+    n as T
+}
+
+impl vec<T, N> {
+    fn $copy(self: *const vec<T, N>) -> vec<T, N> {
+        vec { e: self.e }
+    }
+
+    fn $index(self: *vec<T, N>, i: usize) -> *T {
+        &self.e[i]
+    }
+
+    fn $index_rd(self: *const vec<T, N>, i: usize) -> *const T {
+        &self.e[i]
+    }
+
+    fn $add(self: *const vec<T, N>, o: *const vec<T, N>) -> vec<T, N> {
+        let out = *self;
+        for i in 0..N {
+            out.e[i] += o.e[i];
+        }
+        out
+    }
+
+    fn $sub(self: *const vec<T, N>, o: *const vec<T, N>) -> vec<T, N> {
+        let out = *self;
+        for i in 0..N {
+            out.e[i] -= o.e[i];
+        }
+        out
+    }
+
+    fn $neg(self: *const vec<T, N>) -> vec<T, N> {
+        let out = *self;
+        for i in 0..N {
+            out.e[i] = -self.e[i];
+        }
+        out
+    }
+
+    fn $eq(self: *const vec<T, N>, o: *const vec<T, N>) -> bool {
+        for i in 0..N {
+            if self.e[i] != o.e[i] {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The Kronecker product: every element of `self` times all of `o`.
+    fn $tensor<M: const usize>(self: *const vec<T, N>, o: *const vec<T, M>) -> vec<T, N * M> {
+        let zero: T = __number::<T>(0);
+        let out: vec<T, N * M> = vec { e: [zero; N * M] };
+        for i in 0..N {
+            for j in 0..M {
+                out.e[i * M + j] = self.e[i] * o.e[j];
+            }
+        }
+        out
+    }
+
+    /// Each element times `k`.
+    fn scale(self: *const vec<T, N>, k: *const T) -> vec<T, N> {
+        let out = *self;
+        for i in 0..N {
+            out.e[i] = *k * self.e[i];
+        }
+        out
+    }
+
+    /// The sum of the products of matching elements.
+    fn dot(self: *const vec<T, N>, o: *const vec<T, N>) -> T {
+        let acc: T = __number::<T>(0);
+        for i in 0..N {
+            acc += self.e[i] * o.e[i];
+        }
+        acc
+    }
+
+    /// The inner product, conjugate-linear in `self`: `self`'s adjoint
+    /// applied to `o`, as `adjoint(a) * b` is.
+    fn inner(self: *const vec<T, N>, o: *const vec<T, N>) -> T {
+        adjoint(self).apply(o)
+    }
+
+    /// The inner product of `self` with itself: the square of its length.
+    fn norm2(self: *const vec<T, N>) -> T {
+        self.inner(self)
+    }
+
+    /// The adjoint: the covector of `self`'s elements conjugated.
+    fn $adj(self: *const vec<T, N>) -> covec<T, N> {
+        let zero: T = __number::<T>(0);
+        let out: covec<T, N> = covec { e: [zero; N] };
+        for i in 0..N {
+            out.e[i] = adjoint(self.e[i]);
+        }
+        out
+    }
+
+    /// The outer product with the covector `o`, as `a * b` is for a vector
+    /// and a covector: element (i, j) is `self`'s i-th times `o`'s j-th.
+    fn outer<M: const usize>(self: *const vec<T, N>, o: *const covec<T, M>) -> mat<T, N, M> {
+        let zero: T = __number::<T>(0);
+        let out: mat<T, N, M> = mat { e: [[zero; M]; N] };
+        for i in 0..N {
+            for j in 0..M {
+                out.e[i][j] = self.e[i] * o.e[j];
+            }
+        }
+        out
+    }
+}
+
+impl covec<T, N> {
+    fn $copy(self: *const covec<T, N>) -> covec<T, N> {
+        covec { e: self.e }
+    }
+
+    fn $index(self: *covec<T, N>, i: usize) -> *T {
+        &self.e[i]
+    }
+
+    fn $index_rd(self: *const covec<T, N>, i: usize) -> *const T {
+        &self.e[i]
+    }
+
+    fn $add(self: *const covec<T, N>, o: *const covec<T, N>) -> covec<T, N> {
+        let out = *self;
+        for i in 0..N {
+            out.e[i] += o.e[i];
+        }
+        out
+    }
+
+    fn $sub(self: *const covec<T, N>, o: *const covec<T, N>) -> covec<T, N> {
+        let out = *self;
+        for i in 0..N {
+            out.e[i] -= o.e[i];
+        }
+        out
+    }
+
+    fn $neg(self: *const covec<T, N>) -> covec<T, N> {
+        let out = *self;
+        for i in 0..N {
+            out.e[i] = -self.e[i];
+        }
+        out
+    }
+
+    fn $eq(self: *const covec<T, N>, o: *const covec<T, N>) -> bool {
+        for i in 0..N {
+            if self.e[i] != o.e[i] {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The Kronecker product: every element of `self` times all of `o`.
+    fn $tensor<M: const usize>(self: *const covec<T, N>, o: *const covec<T, M>) -> covec<T, N * M> {
+        let zero: T = __number::<T>(0);
+        let out: covec<T, N * M> = covec { e: [zero; N * M] };
+        for i in 0..N {
+            for j in 0..M {
+                out.e[i * M + j] = self.e[i] * o.e[j];
+            }
+        }
+        out
+    }
+
+    /// `self` times the matrix `m`: `self` applied to each column of `m`.
+    fn $mul<K: const usize>(self: *const covec<T, N>, m: *const mat<T, N, K>) -> covec<T, K> {
+        let zero: T = __number::<T>(0);
+        let out: covec<T, K> = covec { e: [zero; K] };
+        for k in 0..K {
+            let acc: T = __number::<T>(0);
+            for j in 0..N {
+                acc += self.e[j] * m.e[j][k];
+            }
+            out.e[k] = acc;
+        }
+        out
+    }
+
+    /// `self` applied to the vector `v`, as `a * v` is for a covector and a
+    /// vector: the sum of the products of matching elements.
+    fn apply(self: *const covec<T, N>, v: *const vec<T, N>) -> T {
+        let acc: T = __number::<T>(0);
+        for i in 0..N {
+            acc += self.e[i] * v.e[i];
+        }
+        acc
+    }
+
+    /// Each element times `k`.
+    fn scale(self: *const covec<T, N>, k: *const T) -> covec<T, N> {
+        let out = *self;
+        for i in 0..N {
+            out.e[i] = *k * self.e[i];
+        }
+        out
+    }
+
+    /// The adjoint: the vector of `self`'s elements conjugated.
+    fn $adj(self: *const covec<T, N>) -> vec<T, N> {
+        let zero: T = __number::<T>(0);
+        let out: vec<T, N> = vec { e: [zero; N] };
+        for i in 0..N {
+            out.e[i] = adjoint(self.e[i]);
+        }
+        out
+    }
+}
+
+impl mat<T, R, C> {
+    fn $copy(self: *const mat<T, R, C>) -> mat<T, R, C> {
+        mat { e: self.e }
+    }
+
+    /// Row `i`.
+    fn $index(self: *mat<T, R, C>, i: usize) -> *[T; C] {
+        &self.e[i]
+    }
+
+    fn $index_rd(self: *const mat<T, R, C>, i: usize) -> *const [T; C] {
+        &self.e[i]
+    }
+
+    fn $add(self: *const mat<T, R, C>, o: *const mat<T, R, C>) -> mat<T, R, C> {
+        let out = *self;
+        for i in 0..R {
+            for j in 0..C {
+                out.e[i][j] += o.e[i][j];
+            }
+        }
+        out
+    }
+
+    fn $sub(self: *const mat<T, R, C>, o: *const mat<T, R, C>) -> mat<T, R, C> {
+        let out = *self;
+        for i in 0..R {
+            for j in 0..C {
+                out.e[i][j] -= o.e[i][j];
+            }
+        }
+        out
+    }
+
+    fn $neg(self: *const mat<T, R, C>) -> mat<T, R, C> {
+        let out = *self;
+        for i in 0..R {
+            for j in 0..C {
+                out.e[i][j] = -self.e[i][j];
+            }
+        }
+        out
+    }
+
+    fn $eq(self: *const mat<T, R, C>, o: *const mat<T, R, C>) -> bool {
+        for i in 0..R {
+            for j in 0..C {
+                if self.e[i][j] != o.e[i][j] {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// The matrix product.
+    fn $mul<K: const usize>(self: *const mat<T, R, C>, o: *const mat<T, C, K>) -> mat<T, R, K> {
+        let zero: T = __number::<T>(0);
+        let out: mat<T, R, K> = mat { e: [[zero; K]; R] };
+        for i in 0..R {
+            for k in 0..K {
+                let acc: T = __number::<T>(0);
+                for j in 0..C {
+                    acc += self.e[i][j] * o.e[j][k];
+                }
+                out.e[i][k] = acc;
+            }
+        }
+        out
+    }
+
+    /// The Kronecker product: each element of `self` times all of `o`.
+    fn $tensor<P: const usize, Q: const usize>(self: *const mat<T, R, C>, o: *const mat<T, P, Q>) -> mat<T, R * P, C * Q> {
+        let zero: T = __number::<T>(0);
+        let out: mat<T, R * P, C * Q> = mat { e: [[zero; C * Q]; R * P] };
+        for i in 0..R {
+            for j in 0..C {
+                for p in 0..P {
+                    for q in 0..Q {
+                        out.e[i * P + p][j * Q + q] = self.e[i][j] * o.e[p][q];
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// `self` applied to the vector `v`.
+    fn apply(self: *const mat<T, R, C>, v: *const vec<T, C>) -> vec<T, R> {
+        let zero: T = __number::<T>(0);
+        let out: vec<T, R> = vec { e: [zero; R] };
+        for i in 0..R {
+            let acc: T = __number::<T>(0);
+            for j in 0..C {
+                acc += self.e[i][j] * v.e[j];
+            }
+            out.e[i] = acc;
+        }
+        out
+    }
+
+    /// Each element times `k`.
+    fn scale(self: *const mat<T, R, C>, k: *const T) -> mat<T, R, C> {
+        let out = *self;
+        for i in 0..R {
+            for j in 0..C {
+                out.e[i][j] = *k * self.e[i][j];
+            }
+        }
+        out
+    }
+
+    fn transpose(self: *const mat<T, R, C>) -> mat<T, C, R> {
+        let zero: T = __number::<T>(0);
+        let out: mat<T, C, R> = mat { e: [[zero; R]; C] };
+        for i in 0..R {
+            for j in 0..C {
+                out.e[j][i] = self.e[i][j];
+            }
+        }
+        out
+    }
+
+    /// The adjoint: the conjugate transpose.
+    fn $adj(self: *const mat<T, R, C>) -> mat<T, C, R> {
+        let zero: T = __number::<T>(0);
+        let out: mat<T, C, R> = mat { e: [[zero; R]; C] };
+        for i in 0..R {
+            for j in 0..C {
+                out.e[j][i] = adjoint(self.e[i][j]);
+            }
+        }
+        out
+    }
+
+    /// The sum of the diagonal.
+    fn trace(self: *const mat<T, R, C>) -> T where R == C {
+        let acc: T = __number::<T>(0);
+        for i in 0..R {
+            acc += self.e[i][i];
+        }
+        acc
+    }
+
+    /// The determinant, by fraction-free elimination: every division is
+    /// exact, so it is right for integer elements as well.
+    fn det(self: *const mat<T, R, C>) -> T where R == C {
+        let zero: T = __number::<T>(0);
+        let a = *self;
+        let sign: T = __number::<T>(1);
+        let prev: T = __number::<T>(1);
+        for k in 0..R {
+            if a.e[k][k] == zero {
+                // a row below with something in this column is swapped in
+                let found = false;
+                for r in (k + 1)..R {
+                    if a.e[r][k] != zero {
+                        swap(&a.e[r], &a.e[k]);
+                        sign = -sign;
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return zero;
+                }
+            }
+            for i in (k + 1)..R {
+                for j in (k + 1)..R {
+                    a.e[i][j] = (a.e[i][j] * a.e[k][k] - a.e[i][k] * a.e[k][j]) / prev;
+                }
+            }
+            prev = a.e[k][k];
+        }
+        sign * a.e[R - 1][R - 1]
+    }
+
+    /// The inverse, or `None` when there is none.
+    fn inverse(self: *const mat<T, R, C>) -> mat<T, R, C>? where R == C {
+        let zero: T = __number::<T>(0);
+        let one: T = __number::<T>(1);
+        let a = *self;
+        let out: mat<T, R, C> = mat { e: [[zero; C]; R] };
+        for i in 0..R {
+            out.e[i][i] = one;
+        }
+        for k in 0..R {
+            let pivot = R;
+            for r in k..R {
+                if a.e[r][k] != zero {
+                    pivot = r;
+                    break;
+                }
+            }
+            if pivot == R {
+                return None;
+            }
+            if pivot != k {
+                swap(&a.e[pivot], &a.e[k]);
+                swap(&out.e[pivot], &out.e[k]);
+            }
+            let p = a.e[k][k];
+            for j in 0..R {
+                a.e[k][j] /= p;
+                out.e[k][j] /= p;
+            }
+            for i in 0..R {
+                if i != k {
+                    let f = a.e[i][k];
+                    for j in 0..R {
+                        a.e[i][j] -= f * a.e[k][j];
+                        out.e[i][j] -= f * out.e[k][j];
+                    }
+                }
+            }
+        }
+        Some(out)
+    }
+}

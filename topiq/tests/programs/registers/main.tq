@@ -1,0 +1,28 @@
+// expect: exit 0
+// stdout: 0 3 7 yyyy 4 3 4
+// Running circuits whose registers grow as they run.
+#unit classical
+import circs;
+import qpu;
+
+fn main() -> i32 {
+    let dev = qpu::connect("sim://exact").unwrap();
+    print(&tcon::emit(&dev.run(circs::ones, 0).unwrap()));
+    print(" ");
+    print(&tcon::emit(&dev.run(circs::ones, 3).unwrap()));
+    print(" ");
+    print(&tcon::emit(&circs::ones(7)));
+    print(" ");
+    for i in 0..4 {
+        if circs::ghz(5) { print("y"); } else { print("n"); }
+    }
+    print(" ");
+    print(&tcon::emit(&circs::rounds(4)));
+    print(" ");
+    let (a, b) = circs::lengths(3);
+    print(&tcon::emit(&a));
+    print(" ");
+    print(&tcon::emit(&b));
+    print("\n");
+    0
+}

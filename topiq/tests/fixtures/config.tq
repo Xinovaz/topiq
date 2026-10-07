@@ -1,0 +1,22 @@
+// Data-driven configuration, and its dynamic counterpart.
+#unit classical(setup)
+
+struct ServerConfig { host: [char], port: u16, tls: TlsConfig? }
+struct TlsConfig    { cert: [char], key: [char] }
+
+let DEFAULTS: const ServerConfig = @embed("defaults.tcon");
+let ACTIVE: ServerConfig;
+
+fn setup() { ACTIVE = clone(&DEFAULTS); }
+
+fn load(path: *[char]) -> ServerConfig {
+    match fs::read(path) {
+        Ok(src) => tcon::parse::<ServerConfig>(&src).unwrap_or(clone(&DEFAULTS)),
+        Err(_)  => clone(&DEFAULTS),
+    }
+}
+
+fn load_dyn(path: *[char], type_name: *[char], m: *module::Module) -> Result<dyn, dyn::Error> {
+    let ti = m.typeinfo(type_name).ok_or(dyn::Error::NoSuchField)?;
+    dyn::bind(&tcon::parse_dyn(&fs::read(path).unwrap())?, ti)
+}

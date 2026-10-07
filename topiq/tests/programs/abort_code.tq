@@ -1,0 +1,6 @@
+// expect: abort RA06 at 6
+#unit classical
+
+fn pick(n: i32) -> AbortCode { if n > 0 { AbortCode::RA06 } else { AbortCode::RA01 } }
+
+fn main() -> i32 { abort(pick(1), "chosen when the program runs") }

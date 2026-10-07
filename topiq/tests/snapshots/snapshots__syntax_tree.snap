@@ -1,0 +1,71 @@
+---
+source: tests/snapshots.rs
+expression: "topiq::ast::print::unit(unit, session.interner())"
+---
+unit quantum
+  import gates
+  cover B2
+  gauge GB
+  base Bell over B2 with GB
+  enum Guess
+    variant Constant
+    variant Balanced
+  [entry]
+  [cover]
+  [gauge]
+  [expect]
+  fn bell
+    param r: *[qubit; _]
+    -> Guess
+    block
+      let q
+        : [qubit; _]
+        prep
+          <QUON state>
+      aux let a
+        : qubit
+      call
+        path h
+        unary Ref
+          index
+            path q
+            int 0
+      block-statement
+        for
+          pattern bind i
+          range ..
+            int 0
+            int 2
+          block
+            call
+              path cx
+              unary Ref
+                index
+                  path q
+                  int 0
+              unary Ref
+                index
+                  path q
+                  int 1
+      let bits
+        measure
+          path q
+      value
+        if
+          binary &&
+            index
+              path bits
+              int 0
+            unary Not
+              index
+                path bits
+                int 1
+          block
+            value
+              path Guess::Balanced
+          else
+            block
+              value
+                path Guess::Constant
+  chain Loop (1 stages)
+    stage Bell -> Bell

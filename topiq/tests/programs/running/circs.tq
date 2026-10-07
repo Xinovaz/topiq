@@ -1,0 +1,83 @@
+// Circuits a classical program runs.
+#unit quantum
+import gates;
+
+// Both halves of a Bell pair.
+[entry]
+fn bell(n: u32) -> (bool, bool) {
+    let q: [qubit; 2] = prep |00>;
+    h(&q[0]);
+    cx(&q[0], &q[1]);
+    let m = measure q;
+    (m[0], m[1])
+}
+
+// Teleports |1> from the first qubit to the third, correcting by what the
+// first two measure.
+[entry]
+fn teleport(n: u32) -> bool {
+    let a: [qubit; 1] = prep |1>;
+    let b: [qubit; 1] = prep |0>;
+    let c: [qubit; 1] = prep |0>;
+    h(&b[0]);
+    cx(&b[0], &c[0]);
+    cx(&a[0], &b[0]);
+    h(&a[0]);
+    let ma = measure a;
+    let mb = measure b;
+    if mb[0] { x(&c[0]); }
+    if ma[0] { z(&c[0]); }
+    let mc = measure c;
+    mc[0]
+}
+
+// Counts the ones measured in `n` rounds, a count known as the circuit runs.
+[entry]
+fn count(n: u32) -> u32 {
+    let c: u32 = 0;
+    for i in 0..n {
+        let s: [qubit; 1] = prep |1>;
+        let m = measure s;
+        if m[0] { c = c + 1; }
+    }
+    c
+}
+
+// Lifts a measured value to choose how many rounds to run.
+[entry]
+fn lifted(n: u32) -> u32 {
+    let q: [qubit; 1] = prep |1>;
+    let m = measure q;
+    let k: usize = lift (if m[0] { 3 } else { 1 });
+    let c: u32 = 0;
+    for i in 0..k {
+        c = c + 1;
+    }
+    c
+}
+
+// Measures a register the caller gives.
+[entry]
+fn read(q: [qubit; 2]) -> (bool, bool) {
+    let m = measure q;
+    (m[0], m[1])
+}
+
+// Gives back a qubit and what it measured of another: the caller receives
+// the classical part.
+[entry]
+fn keep(n: u32) -> ([qubit; 1], bool) {
+    let q: [qubit; 1] = prep |0>;
+    let r: [qubit; 1] = prep |1>;
+    let m = measure r;
+    (q, m[0])
+}
+
+// Measures |+>, which gives either outcome.
+[entry]
+fn plus(n: u32) -> bool {
+    let q: [qubit; 1] = prep |0>;
+    h(&q[0]);
+    let m = measure q;
+    m[0]
+}

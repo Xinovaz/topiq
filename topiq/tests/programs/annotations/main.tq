@@ -1,0 +1,30 @@
+// expect: exit 0
+// stdout: 2 6 7 1 2 3 8.
+// Annotations that change a function's symbol or inlining, or warn at its
+// uses, leave what the program does as it was.
+#unit classical
+import shapes;
+
+fn show(n: i64) {
+    print(&tcon::emit(&n));
+}
+
+fn main() -> i32 {
+    let o = shapes::Old { v: 1 };
+    show(shapes::width(1));
+    print(" ");
+    show(shapes::span(2));
+    print(" ");
+    show(shapes::COUNT);
+    print(" ");
+    show(o.v);
+    print(" ");
+    show(shapes::slow(1));
+    print(" ");
+    show(shapes::quick(1));
+    print(" ");
+    shapes::COUNT = shapes::COUNT + 1;
+    show(shapes::COUNT);
+    print(".\n");
+    0
+}

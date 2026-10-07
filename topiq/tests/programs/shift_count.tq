@@ -1,0 +1,11 @@
+// expect: abort RA05 at 6
+// A shift by the full width of the value.
+#unit classical
+
+fn shift(x: u32, n: u8) -> u32 {
+    x >> n
+}
+
+fn main() -> i32 {
+    shift(1, 32) as i32
+}

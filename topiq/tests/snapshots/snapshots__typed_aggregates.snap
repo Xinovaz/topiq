@@ -1,0 +1,26 @@
+---
+source: tests/snapshots.rs
+expression: "topiq::tir::print::unit(out.tir().expect(\"analysis ran\"), session.interner())"
+---
+unit aggregates
+  struct Point { x: i32, y: i32 }
+  enum Shape { Empty, Circle(i32), Rect { corner: Point, w: i32, h: i32 } }
+  global ORIGIN: const Point = Point { x: 0i32, y: 0i32 }
+  global NAMES: [*[char]; 2] = ["circle", "rect"]
+  fn area(s#0: *Shape) -> i32
+    =>
+      match: i32 (*s#0)
+        Shape::Empty => 0i32
+        Shape::Circle(r#1) => ((3i32 * r#1) * r#1)
+        Shape::Rect { w: w#2, h: h#3 } => (w#2 * h#3)
+  fn grow(p#0: *Point, by#1: i32) -> void
+    (*p#0).x = ((*p#0).x + by#1)
+  fn main() -> i32
+    let shapes#0: [Shape; 2] = [Shape::Circle(2i32), Shape::Rect { corner: Point { x: 0i32, y: 0i32 }, w: 3i32, h: 4i32 }]
+    let total#1: i32 = 0i32
+    for L0 i#2 in 0usize..2usize
+      total#1 = (total#1 + area(&shapes#0[i#2]))
+    let p#3: Point = Point { y: 1i32, x: 2i32 }
+    grow(&p#3, 5i32)
+    print(coerce(NAMES[1usize], *const [char]))
+    => (total#1 + p#3.x)

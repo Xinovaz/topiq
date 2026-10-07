@@ -1,0 +1,23 @@
+// expect: clean
+// The locale and the two contract ascriptions of the language's
+// examples, as written, with the container base type the locale names but
+// does not declare (Issues item 171).
+#unit quantum
+
+cover  Marked = pt(|11>);
+gauge  GM     = none;
+base   M      = [qubit; 2], Marked, GM;
+
+locale MarkedIn = M of Search {
+    [expect: stat(phase::<8>::of(4))]
+    fn reflect(r: *[qubit; 2]);
+}
+
+[cover: fin{ |00>, |11> }]
+[gauge: fid((|00> + |11>) * isq2)]
+[expect: monic; contract = flat(0)]
+fn my_op(r: [qubit; 2]) -> [qubit; 2] { r }
+
+// The register's whole space, which the marked point lies in.
+cover All    = span{ |00>, |01>, |10>, |11> };
+base  Search = [qubit; 2], All, GM;

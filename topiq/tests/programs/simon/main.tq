@@ -1,0 +1,42 @@
+// expect: exit 0
+// stdout: simon 110
+// Simon's algorithm: samples are taken until the strings even with every
+// one of them are the secret alone, which `la::gf2_kernel` finds.
+#unit classical
+import circs;
+import la;
+import qpu;
+
+fn main() -> i32 {
+    let dev = qpu::connect("sim://exact").unwrap();
+    let rows: [u64] = [];
+    let kernel: [u64] = [];
+    for _ in 0..32 {
+        let y = dev.run(circs::sample, 0).unwrap();
+        let row: u64 = 0;
+        for i in 0..3 {
+            row = row * 2 + if y[i] { 1 } else { 0 };
+        }
+        // every sample is even with the secret
+        let both = row & 6u64;
+        if ((both >> 1) ^ (both >> 2)) & 1 != 0 {
+            print("odd sample\n");
+            return 1;
+        }
+        rows.push(row);
+        kernel = la::gf2_kernel(&rows, 3);
+        if kernel.len() == 1 {
+            break;
+        }
+    }
+    if kernel.len() != 1 {
+        print("not found\n");
+        return 1;
+    }
+    print("simon ");
+    for i in 0..3 {
+        if (kernel[0] >> (2 - i)) & 1 == 1 { print("1"); } else { print("0"); }
+    }
+    print("\n");
+    0
+}

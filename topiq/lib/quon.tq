@@ -1,0 +1,637 @@
+//! The `quon` library: QUON, the notation for quantum states.
+//!
+//! A `State` is a classical description of a quantum state: the basis states
+//! it is a superposition of, each with its amplitude. It is not a state on
+//! qubits. Preparing one on qubits is `prep`, and nothing takes qubits back to
+//! a `State`.
+//!
+//! A basis state is its bits, the register's first qubit first. A `State`
+//! lists each basis state at most once, in order, and never with amplitude
+//! zero. An amplitude is a `cyclo<48>`, whose field holds the fields of every
+//! conforming conductor: 8, 16 and 24.
+//!
+//! `parse` reads a state written in QUON, a sum of terms such as
+//! `isq2 * |00> + isq2 * |11>`: each term a coefficient and kets joined by
+//! `**`, the coefficient built from whole numbers, decimals, `i`, `isq2` and
+//! `w(k, N)` with `+`, `-`, `*`, `/` and parentheses. `emit` writes a state in
+//! the same notation, and `norm_check` says whether the squared magnitudes of
+//! its amplitudes sum to one, exactly. In TCON a state is a string holding it
+//! in QUON. `a.inner(&b)` is the inner product <a|b>, as for vectors, and
+//! `a.orthogonal(&b)` whether it is zero. `classify` gives the smallest
+//! cover that can be written down holding a state, or the states near it.
+//!
+//! States of one width are added and subtracted with `+` and `-`, negated
+//! with `-`, scaled with `scale`, and compared with `==`; `a ** b` is the
+//! tensor product, as in QUON.
+
+#unit classical
+import tcon;
+
+/// One basis state of a `State`, and its amplitude.
+struct Term { ket: [bool], amp: cyclo<48> }
+
+/// A state of `width` qubits.
+struct State { width: u32, terms: [Term] }
+
+/// A cover, a set of states: one point, finitely many, the span of some basis
+/// kets, or the code some Pauli strings, such as "XX" or "-ZZ", fix.
+enum Cover { Pt(State), Fin([State]), Span([[bool]]), Code([string]) }
+
+/// Why text could not be read as a state: where, in lines and columns
+/// counted from 1, and what was wrong.
+struct Error { line: u32, col: u32, detail: string }
+
+// In TCON a state is a string holding it in QUON, which reads back exactly.
+impl State {
+    fn to_tcon(self: *const State, w: *tcon::Writer) {
+        let quoted = tcon::emit(&emit(self));
+        for c in &quoted.chars {
+            w.out.push(*c);
+        }
+    }
+
+    fn from_tcon(self: *State, v: *const tcon::Value) -> Result<(), tcon::Error> {
+        match v {
+            tcon::Value::Str(s) => match parse(s) {
+                Ok(read) => {
+                    *self = read;
+                    Ok(())
+                }
+                Err(e) => Err(tcon::Error { line: 0, col: 0, detail: e.detail }),
+            },
+            _ => Err(tcon::Error { line: 0, col: 0, detail: "a state is written in TCON as a string holding it in QUON" }),
+        }
+    }
+}
+
+/////////////
+// READING //
+/////////////
+
+/// The state `src` writes.
+fn parse(src: *const [char]) -> Result<State, Error> {
+    let r = Reader { src: src, at: 0, line: 1, col: 1 };
+    let s = read_state(&r)?;
+    skip_space(&r);
+    if r.at < r.src.len() {
+        return Err(fail_at(&r, "the state goes on after its last term"));
+    }
+    if s.width == 0 {
+        return Err(Error { line: 1, col: 1, detail: "a state names its qubits in kets, such as |0>" });
+    }
+    Ok(s)
+}
+
+struct Reader { src: *const [char], at: usize, line: u32, col: u32 }
+
+/// A sum of terms. Inside parentheses one may name no qubits, which makes it
+/// a coefficient.
+static fn read_state(r: *Reader) -> Result<State, Error> {
+    skip_space(r);
+    let negative = is(peek(r), '-');
+    if negative {
+        next(r);
+    }
+    let acc = read_term(r)?;
+    if negative {
+        acc = -acc;
+    }
+    loop {
+        skip_space(r);
+        let minus = match peek(r) {
+            Some('+') => false,
+            Some('-') => true,
+            _ => { return Ok(acc); }
+        };
+        next(r);
+        let (line, col) = (r.line, r.col);
+        let t = read_term(r)?;
+        if t.width != acc.width {
+            return Err(Error { line: line, col: col, detail: "every term of a state names as many qubits" });
+        }
+        if minus { acc -= t; } else { acc += t; }
+    }
+}
+
+/// Tensor products multiplied and divided: `*` of two is their tensor
+/// product, a coefficient naming no qubits, and `/` divides by a
+/// coefficient.
+static fn read_term(r: *Reader) -> Result<State, Error> {
+    let acc = read_tensor(r)?;
+    loop {
+        skip_space(r);
+        let divide = match peek(r) {
+            Some('*') => false,
+            Some('/') => true,
+            _ => { return Ok(acc); }
+        };
+        next(r);
+        let (line, col) = (r.line, r.col);
+        let rhs = read_tensor(r)?;
+        if divide {
+            if rhs.width != 0 {
+                return Err(Error { line: line, col: col, detail: "only a coefficient can divide, not a state" });
+            }
+            let c = amplitude(&rhs);
+            if c.is_zero() {
+                return Err(Error { line: line, col: col, detail: "this coefficient divides by zero" });
+            }
+            acc = acc.scale(&(cyclo::<48>::from(1) / c));
+        } else {
+            acc = acc ** rhs;
+        }
+    }
+}
+
+/// Atoms joined by `**`.
+static fn read_tensor(r: *Reader) -> Result<State, Error> {
+    let acc = read_atom(r)?;
+    loop {
+        skip_space(r);
+        if !(is(peek(r), '*') && is(peek_at(r, 1), '*')) {
+            return Ok(acc);
+        }
+        next(r);
+        next(r);
+        acc = acc ** read_atom(r)?;
+    }
+}
+
+/// A ket, a parenthesised state, a number, `i`, `isq2` or `w(k, N)`.
+static fn read_atom(r: *Reader) -> Result<State, Error> {
+    skip_space(r);
+    let c = match peek(r) {
+        Some(c) => c,
+        None => { return Err(fail_at(r, "the state ends where a term should be")); }
+    };
+    if c == '|' {
+        next(r);
+        let ket: [bool] = [];
+        loop {
+            match next(r) {
+                Some('0') => { ket.push(false); }
+                Some('1') => { ket.push(true); }
+                Some('>') => { break; }
+                _ => { return Err(fail_at(r, "a ket is \"|\", then 0s and 1s, then \">\"")); }
+            }
+        }
+        if ket.len() == 0 {
+            return Err(fail_at(r, "a ket names at least one qubit"));
+        }
+        let width = ket.len() as u32;
+        return Ok(State { width: width, terms: [Term { ket: ket, amp: cyclo::<48>::from(1) }] });
+    }
+    if c == '(' {
+        next(r);
+        let s = read_state(r)?;
+        skip_space(r);
+        if !is(next(r), ')') {
+            return Err(fail_at(r, "a \"(\" is closed with \")\""));
+        }
+        return Ok(s);
+    }
+    if is_digit(c) {
+        return Ok(scalar(cyclo::<48>::of(&read_number(r))));
+    }
+    if is_letter(c) {
+        let (line, col) = (r.line, r.col);
+        let name = read_name(r);
+        if str::eq(&name, "i") {
+            return Ok(scalar(cyclo::<48>::zeta(12)));
+        }
+        if str::eq(&name, "isq2") {
+            let half = cyclo::<48>::of(&frac::of(1, 2));
+            return Ok(scalar((cyclo::<48>::zeta(6) - cyclo::<48>::zeta(18)) * half));
+        }
+        if str::eq(&name, "w") {
+            return read_root(r, line, col);
+        }
+        return Err(Error { line: line, col: col, detail: "a state read while the program runs names no other state; write it out" });
+    }
+    Err(fail_at(r, "a term is made of kets such as |01>, numbers, i, isq2, w(k, N) and parentheses"))
+}
+
+/// `w(k, N)` after the `w`: e^(2πik/N), which must be in the field of
+/// conductor 48.
+static fn read_root(r: *Reader, line: u32, col: u32) -> Result<State, Error> {
+    skip_space(r);
+    if !is(next(r), '(') {
+        return Err(fail_at(r, "w is written w(k, N)"));
+    }
+    skip_space(r);
+    let k = read_whole(r)?;
+    skip_space(r);
+    if !is(next(r), ',') {
+        return Err(fail_at(r, "w is written w(k, N)"));
+    }
+    skip_space(r);
+    let n = read_whole(r)?;
+    skip_space(r);
+    if !is(next(r), ')') {
+        return Err(fail_at(r, "w is written w(k, N)"));
+    }
+    if n == 0 {
+        return Err(Error { line: line, col: col, detail: "w(k, N) is e^(2πik/N), for which N must be at least 1" });
+    }
+    let g = gcd(k % n, n);
+    let order = n / g;
+    if 48 % order != 0 {
+        return Err(Error { line: line, col: col, detail: "this root of unity is not in the field of any conforming conductor" });
+    }
+    let step = ((k % n) / g) * (48 / order);
+    Ok(scalar(cyclo::<48>::zeta(step as i64)))
+}
+
+/// Digits, with a fractional part after `.`, as an exact number.
+static fn read_number(r: *Reader) -> frac {
+    let ten = frac::from(10);
+    let value = frac::from(0);
+    while is_digit_opt(peek(r)) {
+        value = value * ten + frac::from(digit(next_char(r)));
+    }
+    if is(peek(r), '.') && is_digit_opt(peek_at(r, 1)) {
+        next(r);
+        let scale = frac::from(1);
+        while is_digit_opt(peek(r)) {
+            scale /= ten;
+            value += frac::from(digit(next_char(r))) * scale;
+        }
+    }
+    value
+}
+
+/// A whole number.
+static fn read_whole(r: *Reader) -> Result<u64, Error> {
+    if !is_digit_opt(peek(r)) {
+        return Err(fail_at(r, "a whole number goes here"));
+    }
+    let n: u64 = 0;
+    while is_digit_opt(peek(r)) {
+        if n > 100000000000 {
+            return Err(fail_at(r, "this number is too large"));
+        }
+        n = n * 10 + (digit(next_char(r)) as u64);
+    }
+    Ok(n)
+}
+
+static fn read_name(r: *Reader) -> [char] {
+    let name: [char] = [];
+    loop {
+        match peek(r) {
+            Some(c) => {
+                if !(is_letter(c) || is_digit(c)) {
+                    return name;
+                }
+                name.push(c);
+                next(r);
+            }
+            None => { return name; }
+        }
+    }
+}
+
+static fn skip_space(r: *Reader) {
+    loop {
+        match peek(r) {
+            Some(c) => {
+                if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+                    return;
+                }
+                next(r);
+            }
+            None => { return; }
+        }
+    }
+}
+
+static fn peek(r: *const Reader) -> char? {
+    peek_at(r, 0)
+}
+
+static fn peek_at(r: *const Reader, ahead: usize) -> char? {
+    if r.at + ahead < r.src.len() { Some(r.src[r.at + ahead]) } else { None }
+}
+
+static fn next(r: *Reader) -> char? {
+    if r.at >= r.src.len() {
+        return None;
+    }
+    let c = r.src[r.at];
+    r.at++;
+    if c == '\n' {
+        r.line++;
+        r.col = 1;
+    } else {
+        r.col++;
+    }
+    Some(c)
+}
+
+/// The next character.
+static fn next_char(r: *Reader) -> char {
+    match next(r) { Some(c) => c, None => ' ' }
+}
+
+static fn fail_at(r: *const Reader, detail: *const [char]) -> Error {
+    Error { line: r.line, col: r.col, detail: clone(detail) }
+}
+
+/////////////
+// WRITING //
+/////////////
+
+/// `s` in QUON, which `parse` reads back as `s`.
+fn emit(s: *const State) -> string {
+    let out: string = "";
+    if s.terms.len() == 0 {
+        out += "0 * ";
+        let zeros: [bool] = [];
+        for _ in 0..s.width {
+            zeros.push(false);
+        }
+        write_ket(&out, &zeros);
+        return out;
+    }
+    for n in 0..s.terms.len() {
+        let t = &s.terms[n];
+        let rational = t.amp.to_frac();
+        let negative = match rational {
+            Some(f) => f < frac::from(0),
+            None => false,
+        };
+        if n == 0 {
+            if negative {
+                out += "-";
+            }
+        } else {
+            out += if negative { " - " } else { " + " };
+        }
+        match rational {
+            Some(f) => {
+                let size = if negative { -f } else { f };
+                if size != frac::from(1) {
+                    out += size.text([]);
+                    out += " * ";
+                }
+            }
+            None => {
+                out += "(";
+                write_cyclo(&out, &t.amp);
+                out += ") * ";
+            }
+        }
+        write_ket(&out, &t.ket);
+    }
+    out
+}
+
+static fn write_ket(out: *string, ket: *const [bool]) {
+    *out += "|";
+    for b in ket {
+        out.chars.push(if *b { '1' } else { '0' });
+    }
+    *out += ">";
+}
+
+/// An amplitude as a sum of rational multiples of `w(k, 48)`.
+static fn write_cyclo(out: *string, c: *const cyclo<48>) {
+    let first = true;
+    for k in 0..c.c.len() {
+        let x = c.c[k];
+        if !x.is_zero() {
+            let negative = x < frac::from(0);
+            let size = if negative { -x } else { x };
+            if first {
+                if negative {
+                    *out += "-";
+                }
+            } else {
+                *out += if negative { " - " } else { " + " };
+            }
+            first = false;
+            if k == 0 {
+                *out += size.text([]);
+            } else {
+                if size != frac::from(1) {
+                    *out += size.text([]);
+                    *out += " * ";
+                }
+                *out += "w(" + tcon::emit(&k) + ", 48)";
+            }
+        }
+    }
+}
+
+//////////////
+// CHECKING //
+//////////////
+
+/// Whether the squared magnitudes of `s`'s amplitudes sum to one, which
+/// makes it a state: decided exactly.
+fn norm_check(s: *const State) -> bool {
+    let total = cyclo::<48>::from(0);
+    for t in &s.terms {
+        total += t.amp * adjoint(t.amp);
+    }
+    total == cyclo::<48>::from(1)
+}
+
+/// The inner product <self|o>, conjugate-linear in `self`, as a vector's
+/// is: the sum, over the basis states both have, of `self`'s amplitude
+/// conjugated times `o`'s. States of different widths have none, and asking
+/// for it panics.
+fn State.inner(self: *const State, o: *const State) -> cyclo<48> {
+    if self.width != o.width {
+        panic("states of different widths have no inner product");
+    }
+    let total = cyclo::<48>::from(0);
+    let i = 0;
+    let j = 0;
+    while i < self.terms.len() && j < o.terms.len() {
+        match compare(&self.terms[i].ket, &o.terms[j].ket) {
+            Ord::Lt => { i++; }
+            Ord::Gt => { j++; }
+            Ord::Eq => {
+                total += adjoint(self.terms[i].amp) * o.terms[j].amp;
+                i++;
+                j++;
+            }
+        }
+    }
+    total
+}
+
+/// Whether `self` and `o` are orthogonal, <self|o> = 0: decided exactly.
+fn State.orthogonal(self: *const State, o: *const State) -> bool {
+    self.inner(o).is_zero()
+}
+
+/// The smallest cover that can be written down holding `s`, or every state
+/// within fidelity `eps` of it. At `eps` zero that is the point itself. Any
+/// larger `eps` holds states near `s` in every direction, which no cover but
+/// the whole space holds, so it is the span of every ket of the register:
+/// at most 256 of them, which is eight qubits.
+fn classify(s: *const State, eps: frac) -> Result<Cover, Error> {
+    if eps < frac::from(0) {
+        return Err(Error { line: 0, col: 0, detail: "a fidelity radius is at least zero" });
+    }
+    if !norm_check(s) {
+        return Err(Error { line: 0, col: 0, detail: "a state's squared magnitudes sum to one, and these do not" });
+    }
+    if eps == frac::from(0) {
+        return Ok(Cover::Pt(clone(s)));
+    }
+    if s.width > 8 {
+        return Err(Error { line: 0, col: 0, detail: "the whole space of more than eight qubits has more kets than a cover may list" });
+    }
+    let kets: [[bool]] = [];
+    let count: u32 = 1 << s.width;
+    for i in 0..count {
+        let ket: [bool] = [];
+        for q in 0..s.width {
+            ket.push(((i >> (s.width - 1 - q)) & 1) == 1);
+        }
+        kets.push(ket);
+    }
+    Ok(Cover::Span(kets))
+}
+
+//////////////////////////
+// ARITHMETIC ON STATES //
+//////////////////////////
+
+/// A coefficient: a state of no qubits.
+static fn scalar(c: cyclo<48>) -> State {
+    if c.is_zero() {
+        return State { width: 0, terms: [] };
+    }
+    State { width: 0, terms: [Term { ket: [], amp: c }] }
+}
+
+/// The amplitude of a state of no qubits.
+static fn amplitude(s: *const State) -> cyclo<48> {
+    if s.terms.len() == 0 { cyclo::<48>::from(0) } else { s.terms[0].amp }
+}
+
+// States are added, subtracted and negated as vectors, of one width, and
+// `a ** b` is their tensor product, `a`'s qubits first. The terms stay in
+// order, and amplitudes that cancel are dropped, so two states are equal,
+// `==`, exactly when their terms are.
+impl State {
+    /// `self` with each amplitude times `c`.
+    fn scale(self: *const State, c: *const cyclo<48>) -> State {
+        let terms: [Term] = [];
+        if !c.is_zero() {
+            for t in &self.terms {
+                terms.push(Term { ket: clone(&t.ket), amp: t.amp * *c });
+            }
+        }
+        State { width: self.width, terms: terms }
+    }
+
+    // a state of one width added to one of another names nothing
+    fn $add(self: *const State, o: *const State) -> State {
+        if self.width != o.width {
+            panic("states of different widths cannot be added");
+        }
+        let (a, b) = (&self.terms, &o.terms);
+        let terms: [Term] = [];
+        let i = 0;
+        let j = 0;
+        while i < a.len() || j < b.len() {
+            if j >= b.len() {
+                terms.push(clone(&a[i++]));
+            } else if i >= a.len() {
+                terms.push(clone(&b[j++]));
+            } else {
+                match compare(&a[i].ket, &b[j].ket) {
+                    Ord::Lt => terms.push(clone(&a[i++])),
+                    Ord::Gt => terms.push(clone(&b[j++])),
+                    Ord::Eq => {
+                        let c = a[i].amp + b[j].amp;
+                        if !c.is_zero() {
+                            terms.push(Term { ket: clone(&a[i].ket), amp: c });
+                        }
+                        i++;
+                        j++;
+                    }
+                }
+            }
+        }
+        State { width: self.width, terms: terms }
+    }
+
+    fn $sub(self: *const State, o: *const State) -> State {
+        *self + -*o
+    }
+
+    fn $neg(self: *const State) -> State {
+        self.scale(&cyclo::<48>::from(-1))
+    }
+
+    fn $tensor(self: *const State, o: *const State) -> State {
+        let terms: [Term] = [];
+        for x in &self.terms {
+            for y in &o.terms {
+                let ket = clone(&x.ket);
+                for q in &y.ket {
+                    ket.push(*q);
+                }
+                terms.push(Term { ket: ket, amp: x.amp * y.amp });
+            }
+        }
+        State { width: self.width + o.width, terms: terms }
+    }
+
+    fn $eq(self: *const State, o: *const State) -> bool {
+        if self.width != o.width || self.terms.len() != o.terms.len() {
+            return false;
+        }
+        for i in 0..self.terms.len() {
+            let (a, b) = (&self.terms[i], &o.terms[i]);
+            if compare(&a.ket, &b.ket) != Ord::Eq || a.amp != b.amp {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Basis states in order, `0` before `1` qubit by qubit.
+static fn compare(a: *const [bool], b: *const [bool]) -> Ord {
+    for q in 0..a.len() {
+        if a[q] != b[q] {
+            return if b[q] { Ord::Lt } else { Ord::Gt };
+        }
+    }
+    Ord::Eq
+}
+
+//////////
+// TEXT //
+//////////
+
+static fn gcd(a: u64, b: u64) -> u64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+static fn is(c: char?, want: char) -> bool {
+    match c { Some(x) => x == want, None => false }
+}
+
+static fn is_digit(c: char) -> bool {
+    c >= '0' && c <= '9'
+}
+
+static fn is_digit_opt(c: char?) -> bool {
+    match c { Some(c) => is_digit(c), None => false }
+}
+
+static fn is_letter(c: char) -> bool {
+    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+}
+
+static fn digit(c: char) -> i64 {
+    ((c as u32) - 48) as i64
+}

@@ -1,0 +1,221 @@
+//! The `judge` library: the records of what an operator does to quantum
+//! state, as `@judgment`, `@certificate`, `@kernel` and `@fragment_of` give
+//! them.
+//!
+//! A judgement is derived exactly, against an operator's endpoints: a cover of
+//! its register's states, with a gauge fixing each point's phase. Its
+//! certificate says where each point goes and with what phase; its contract
+//! is the strongest class that certificate satisfies. A field is `Unknown`
+//! only when the derivation left the checked fragment.
+//!
+//! Phases are `phase<48>`, whose group holds those of every conforming
+//! conductor: 8, 16 and 24.
+//!
+//! `check(j, c)` asks of a judgement, such as one assembled while a program
+//! runs, whether its certificate satisfies the class `c`: the question an
+//! `[expect: …]` asks when a program is translated, answered from the
+//! judgement alone. Over a finite cover a certificate is `rigid` when its
+//! schedule is zero, `flat(c)` when it is `c` throughout, `cyc(p)` when it
+//! is `p` and a constant, and `stat(c)` when it carries each point to itself
+//! with the phase `c`; a stationary operator over a subspace, which has no
+//! gauge, is only ever `stat`. `locflat` is granted only to a constant
+//! schedule, the judgement not saying which points' patches meet. A class
+//! never satisfied is refused with the class the judgement does satisfy,
+//! and, when it asks for one phase throughout a finite cover, with a state
+//! that shows why not.
+
+#unit classical
+import quon;
+
+/// Yes, no, or not decided.
+enum Tri { Yes, No, Unknown }
+
+/// A contract class, with its phases where it has them: `Flat(c)` is θ ≡ c,
+/// `Cyc` the schedule it is a profile of, `Stat(c)` a stationary operator
+/// with phase c, and `Sector` one phase for each sector. `Rigid` is
+/// `Flat(0)`, and `Unknown` a class not decided.
+enum ContractClass {
+    Rigid,
+    Flat(phase<48>),
+    Locflat,
+    Cyc([phase<48>]),
+    Stat(phase<48>),
+    Sector([phase<48>]),
+    Free,
+    Unknown,
+}
+
+/// A certificate [f; θ]. Over a finite cover, `map` gives each point's image,
+/// by index among the target cover's points, `schedule` its phase, and
+/// `points` the points themselves, as the gauge reads them. Over a subspace,
+/// `map` and `points` are empty and `schedule` holds the one phase of a
+/// stationary operator. `sectors` holds each sector's certificate, when the
+/// operator acts on each basis state of its first register separately.
+struct Certificate { map: [usize], schedule: [phase<48>], sectors: [Certificate], points: [quon::State] }
+
+/// What an instrument leaves: how many qubits it measures and forgets, and
+/// the name of its outcome type.
+struct Kernel { measured: u32, forgotten: u32, outcomes: string }
+
+/// The fragment a derivation stayed inside: the conductor, whether it stayed
+/// inside the checked fragment, and whether every gate is a Clifford gate.
+struct FragmentInfo { conductor: u32, inside: bool, stabilizer: bool }
+
+/// What is derived of an operator.
+struct Judgment {
+    monic: Tri,
+    unitary: Tri,
+    contract: ContractClass,
+    cert: Certificate?,
+    kernel: Kernel?,
+    fragment: FragmentInfo,
+    dynamic: bool,
+}
+
+/// Why a judgement does not satisfy a class: the strongest class it does
+/// satisfy, and where there is one, the state that witnesses the refusal or
+/// the stage of a chain it indicts.
+struct Refusal { class_derived: ContractClass, witness: quon::State?, stage: u32? }
+
+/// Whether the judgement `j` satisfies the class `c`.
+fn check(j: *const Judgment, c: ContractClass) -> Result<(), Refusal> {
+    if holds(j, &c) {
+        return Ok(());
+    }
+    let witness = match &j.cert {
+        Some(cert) => witness(cert, &c),
+        None => None,
+    };
+    Err(Refusal { class_derived: clone(&j.contract), witness: witness, stage: None })
+}
+
+/// A state that shows a finite certificate refusing a class that asks for
+/// one phase throughout. Of two points whose phases differ, when they are
+/// orthogonal, the entangled state (p ⊗ |0> + q ⊗ |1>)/√2, whose two branches
+/// the operator, framed with the identity, turns apart; when no such pair
+/// differs, the point whose phase is not the first's. With one phase
+/// throughout, the first point, whose phase is not the one asked for; and
+/// for `stat`, a point the operator moves.
+static fn witness(cert: *const Certificate, c: *const ContractClass) -> quon::State? {
+    let n = cert.points.len();
+    if n == 0 || n != cert.schedule.len() {
+        return None;
+    }
+    match c {
+        ContractClass::Rigid => {}
+        ContractClass::Flat(_) => {}
+        ContractClass::Locflat => {}
+        ContractClass::Stat(_) => {
+            for i in 0..n {
+                if cert.map[i] != i {
+                    return Some(clone(&cert.points[i]));
+                }
+            }
+        }
+        _ => { return None; }
+    }
+    for j in 1..n {
+        if cert.schedule[j] != cert.schedule[0] {
+            for i in 0..j {
+                if cert.schedule[i] != cert.schedule[j] && cert.points[i].orthogonal(&cert.points[j]) {
+                    return Some(entangled(&cert.points[i], &cert.points[j]));
+                }
+            }
+            return Some(clone(&cert.points[j]));
+        }
+    }
+    Some(clone(&cert.points[0]))
+}
+
+/// (p ⊗ |0> + q ⊗ |1>)/√2.
+static fn entangled(p: *const quon::State, q: *const quon::State) -> quon::State {
+    let zero = match quon::parse("isq2 * |0>") {
+        Ok(s) => s,
+        Err(_) => panic("a ket that does not read"),
+    };
+    let one = match quon::parse("isq2 * |1>") {
+        Ok(s) => s,
+        Err(_) => panic("a ket that does not read"),
+    };
+    *p ** zero + *q ** one
+}
+
+static fn holds(j: *const Judgment, c: *const ContractClass) -> bool {
+    match c {
+        ContractClass::Free => true,
+        ContractClass::Unknown => false,
+        ContractClass::Sector(want) => match &j.contract {
+            ContractClass::Sector(have) => want.len() == 0 || same(want, have),
+            _ => false,
+        },
+        _ => match &j.cert {
+            Some(cert) => satisfies(cert, c),
+            None => false,
+        },
+    }
+}
+
+static fn same(a: *const [phase<48>], b: *const [phase<48>]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    for i in 0..a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+    }
+    true
+}
+
+/// The phase every point has.
+static fn constant(s: *const [phase<48>]) -> phase<48>? {
+    if s.len() == 0 {
+        return None;
+    }
+    for p in s {
+        if *p != s[0] {
+            return None;
+        }
+    }
+    Some(s[0])
+}
+
+static fn satisfies(cert: *const Certificate, c: *const ContractClass) -> bool {
+    // over a subspace: a scalar, which needs no gauge, or nothing to read
+    if cert.map.len() == 0 {
+        return match c {
+            ContractClass::Stat(w) => cert.schedule.len() == 1 && cert.schedule[0] == w,
+            _ => false,
+        };
+    }
+    let k = constant(&cert.schedule);
+    match c {
+        ContractClass::Stat(w) => {
+            for i in 0..cert.map.len() {
+                if cert.map[i] != i {
+                    return false;
+                }
+            }
+            match k { Some(v) => v == w, None => false }
+        }
+        ContractClass::Rigid => match k { Some(v) => v.index() == 0, None => false },
+        ContractClass::Flat(w) => match k { Some(v) => v == w, None => false },
+        ContractClass::Locflat => k.is_some(),
+        ContractClass::Cyc(p) => {
+            if p.len() == 0 {
+                return true;
+            }
+            if p.len() != cert.schedule.len() {
+                return false;
+            }
+            let d = cert.schedule[0] - p[0];
+            for i in 0..p.len() {
+                if cert.schedule[i] - p[i] != d {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}

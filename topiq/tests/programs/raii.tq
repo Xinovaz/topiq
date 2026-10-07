@@ -1,0 +1,78 @@
+// expect: exit 0
+// stdout: 2.1.|3.|5.|7.|1.2.3.|10.9.11.|end|12.8.6.4.
+#unit classical
+
+fn show(n: i64) {
+    if n >= 10 { show(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+struct Noisy { id: i64 }
+
+// Each value says when it is destroyed.
+impl Noisy {
+    fn $drop(self: *Noisy) { show(self.id); print("."); }
+}
+
+struct Pair { a: Noisy, b: Noisy }
+
+enum Held { One(Noisy), Two(Noisy, Noisy), Nothing }
+
+fn make(id: i64) -> Noisy { Noisy { id: id } }
+
+fn consume(n: Noisy) { }
+
+fn run() -> i32 {
+    // Destroyed at the end of their block, last declared first.
+    {
+        let x = make(1);
+        let y = make(2);
+    }
+    print("|");
+    // A field moved out is destroyed where it went; the other stays.
+    let p = Pair { a: make(3), b: make(4) };
+    consume(p.a);
+    print("|");
+    // Assignment destroys the value it replaces.
+    let n = make(5);
+    n = make(6);
+    print("|");
+    // A value nothing keeps is destroyed at once.
+    make(7);
+    print("|");
+    // Each iteration's bindings, `continue` included.
+    for i in 0..3 {
+        let k = make(i + 1);
+        if i == 1 { continue; }
+    }
+    print("|");
+    // A `match` that keeps one payload destroys the other; one that keeps
+    // nothing leaves the value alone.
+    let h = Held::Two(make(9), make(10));
+    match h {
+        Held::Two(keep, _) => { consume(keep); }
+        _ => {}
+    }
+    let q = Held::One(make(11));
+    match &q {
+        Held::One(_) => {}
+        _ => {}
+    }
+    consume(match q { Held::One(x) => x, _ => make(0) });
+    print("|");
+    // A closure owns what it captured, and destroys it with itself.
+    let c = make(8);
+    let f = fn() -> i64 with (c) { c.id };
+    if f() != 8 { return 1; }
+    let late = make(12);
+    print("end|");
+    0
+}
+
+// What `run` destroys as it returns comes before the line ends.
+fn main() -> i32 {
+    let r = run();
+    print("\n");
+    r
+}

@@ -1,0 +1,5 @@
+---
+source: tests/snapshots.rs
+expression: text
+---
+# unit quantum ( build_tables ) # pragma conductor ( 24 ) # define WIDTH 2 # define REG ( N ) [ qubit ; N ] import gates ; cover B2 = fin { | 00 > , | 11 > } ; gauge GB = fid ( ( | 00 > + | 11 > ) * isq2 ) ; base Bell = REG ( WIDTH ) , B2 , GB ; enum Guess { Constant , Balanced } [ entry ] [ cover : B2 ] [ gauge : GB ] [ expect : monic ; contract = flat ] fn bell ( r : * REG ( WIDTH ) ) -> Guess { let q : REG ( WIDTH ) = prep | 00 > ; aux let a : qubit ; h ( & q [ 0 ] ) ; for i in 0 .. WIDTH { cx ( & q [ 0 ] , & q [ 1 ] ) ; } let bits = measure q ; if bits [ 0 ] && ! bits [ 1 ] { Guess :: Balanced } else { Guess :: Constant } } chain Loop = bell : Bell -> Bell ;

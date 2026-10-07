@@ -1,0 +1,1369 @@
+//! The `tcon` library: TCON, Topiq Classical Object Notation.
+//!
+//! A TCON document is a Topiq literal. It holds numbers, characters, strings,
+//! `true`, `false` and `null`; arrays, `[a, b]`; objects,
+//! `{ name: value, … }`, which may carry their type's name in front,
+//! `Point { x: 1 }`; and variants, `Name`, `Name(a, b)` or `Name { f: a }`.
+//! Comments and trailing commas are allowed.
+//!
+//! `parse::<T>` reads a document as a `T` and `emit` writes one. Both walk the
+//! type's run-time type information, so every type works with nothing written
+//! for it. A type takes over by having
+//!
+//!     fn to_tcon(self: *const T, w: *tcon::Writer)
+//!     fn from_tcon(self: *T, v: *const tcon::Value) -> Result<(), tcon::Error>
+//!
+//! the second reading into a value whose bytes are all zero, or is written as
+//! the text its `$fmt` gives. `parse_dyn` reads a document without a type, as
+//! a `Value`, and `bind::<T>` checks such a tree against a type.
+//!
+//! A string is a `[char]` or a `string`, and a `T?` is its value or `null`.
+//! Floating values are written as the shortest numeral that reads back
+//! exactly, and those that no numeral denotes as `nan`, `inf` and `-inf`. A
+//! `Value` holds a character as a string of one, and an integer as an `i64`.
+
+#unit classical
+
+/// A document read without a type.
+enum Value { Null, Bool(bool), Int(i64), Float(f64), Str(string), Arr([Value]), Obj([(string, Value)]) }
+
+/// Why a document could not be read: where, in lines and columns counted
+/// from 1, and what was wrong. A problem found once the document was read,
+/// against the type it was read as, is placed at the value concerned; when
+/// that is not known, both are 0.
+struct Error { line: u32, col: u32, detail: string }
+
+/// Where `emit` and a type's own `to_tcon` write. `begin` opens an object,
+/// `emit_pair` writes each of its fields, and `end` closes it.
+struct Writer { out: [char], pairs: [usize] }
+
+/////////////
+// WRITING //
+/////////////
+
+/// `v` as a document.
+fn emit<T>(v: *const T) -> string {
+    emit_any(v)
+}
+
+/// What `p` refers to, as a document, its type being the table it carries.
+fn emit_any(p: *const any) -> string {
+    let w = Writer { out: [], pairs: [] };
+    write_value(&w, p);
+    w.out
+}
+
+/// Opens an object.
+fn begin(w: *Writer) {
+    w.out.push('{');
+    w.pairs.push(0);
+}
+
+/// Closes the object `begin` opened last.
+fn end(w: *Writer) {
+    let n = match w.pairs.pop() { Some(n) => n, None => 0 };
+    if n > 0 {
+        w.out.push(' ');
+    }
+    w.out.push('}');
+}
+
+/// Writes one field of the object being written.
+fn emit_pair(w: *Writer, name: *const [char], v: *const any) {
+    if w.pairs.len() == 0 {
+        w.pairs.push(0);
+    }
+    let last = w.pairs.len() - 1;
+    if w.pairs[last] > 0 {
+        w.out.push(',');
+    }
+    w.out.push(' ');
+    text(w, name);
+    text(w, ": ");
+    write_value(w, v);
+    w.pairs[last]++;
+}
+
+static fn write_value(w: *Writer, p: *const any) {
+    // a `string` is its characters, quoted, not the text its `$fmt` gives
+    match p as *const string {
+        Some(s) => {
+            write_string(w, &s.chars);
+            return;
+        }
+        None => {}
+    }
+    let ti = @typeinfo_of(p);
+    for m in ti.methods {
+        if __text_eq(m.name, "to_tcon") && __same_type(m.sig, @typeinfo(fn(*const any, *Writer))) {
+            invoke::<fn(*const any, *Writer)>(m.addr, p, w);
+            return;
+        }
+        if __text_eq(m.name, "$fmt") && __same_type(m.sig, @typeinfo(fn(*const any, [char]) -> [char])) {
+            let s = invoke::<fn(*const any, [char]) -> [char]>(m.addr, p, []);
+            text(w, &s);
+            return;
+        }
+    }
+    match ti.kind {
+        TypeKind::Scalar => write_scalar(w, p),
+        TypeKind::Struct => {
+            begin(w);
+            for f in ti.fields {
+                emit_pair(w, f.name, __field_at(p, f.offset, f.ty));
+            }
+            end(w);
+        }
+        TypeKind::Tuple => {
+            w.out.push('[');
+            let first = true;
+            for f in ti.fields {
+                if !first {
+                    text(w, ", ");
+                }
+                first = false;
+                write_value(w, __field_at(p, f.offset, f.ty));
+            }
+            w.out.push(']');
+        }
+        TypeKind::Array => {
+            let (at, _) = @raw_parts(p);
+            write_elements(w, at, ti.len, ti.elem);
+        }
+        TypeKind::DynArray => {
+            let (at, n) = growable_parts(p);
+            if __same_type(ti.elem, @typeinfo(char)) {
+                let s: *[char] = @from_raw_parts(at, n);
+                write_string(w, s);
+            } else {
+                write_elements(w, at, n, ti.elem);
+            }
+        }
+        TypeKind::Enum => write_variant(w, p, ti),
+        TypeKind::Dyn => match p as *const dyn {
+            Some(d) => write_value(w, __dyn_view(d)),
+            None => text(w, "null"),
+        },
+        // nothing else can be written; asking to is refused during
+        // translation
+        _ => text(w, "null"),
+    }
+}
+
+static fn write_elements(w: *Writer, at: usize, n: usize, elem: *const TypeInfo) {
+    w.out.push('[');
+    for i in 0..n {
+        if i > 0 {
+            text(w, ", ");
+        }
+        let e: *any = @from_raw_parts(at + i * elem.size, elem);
+        write_value(w, e);
+    }
+    w.out.push(']');
+}
+
+static fn write_variant(w: *Writer, p: *const any, ti: *const TypeInfo) {
+    let v = &ti.variants[read_tag(p, ti)];
+    if is_opt(ti) {
+        if v.fields.len() == 0 {
+            text(w, "null");
+        } else {
+            write_value(w, __field_at(p, v.fields[0].offset, v.fields[0].ty));
+        }
+        return;
+    }
+    text(w, v.name);
+    if v.fields.len() == 0 {
+        return;
+    }
+    if v.fields[0].name.len() == 0 {
+        w.out.push('(');
+        let first = true;
+        for f in v.fields {
+            if !first {
+                text(w, ", ");
+            }
+            first = false;
+            write_value(w, __field_at(p, f.offset, f.ty));
+        }
+        w.out.push(')');
+    } else {
+        w.out.push(' ');
+        begin(w);
+        for f in v.fields {
+            emit_pair(w, f.name, __field_at(p, f.offset, f.ty));
+        }
+        end(w);
+    }
+}
+
+static fn write_scalar(w: *Writer, p: *const any) {
+    match p as *const bool { Some(b) => { text(w, if *b { "true" } else { "false" }); return; } None => {} }
+    match p as *const char { Some(c) => { write_char(w, *c); return; } None => {} }
+    match p as *const f64 { Some(x) => { write_float(w, *x, false); return; } None => {} }
+    match p as *const f32 { Some(x) => { write_float(w, (*x) as f64, true); return; } None => {} }
+    match p as *const i8 { Some(x) => { write_signed(w, (*x) as i64); return; } None => {} }
+    match p as *const i16 { Some(x) => { write_signed(w, (*x) as i64); return; } None => {} }
+    match p as *const i32 { Some(x) => { write_signed(w, (*x) as i64); return; } None => {} }
+    match p as *const i64 { Some(x) => { write_signed(w, *x); return; } None => {} }
+    match p as *const isize { Some(x) => { write_signed(w, (*x) as i64); return; } None => {} }
+    match p as *const u8 { Some(x) => { write_unsigned(w, (*x) as u64); return; } None => {} }
+    match p as *const u16 { Some(x) => { write_unsigned(w, (*x) as u64); return; } None => {} }
+    match p as *const u32 { Some(x) => { write_unsigned(w, (*x) as u64); return; } None => {} }
+    match p as *const u64 { Some(x) => { write_unsigned(w, *x); return; } None => {} }
+    match p as *const usize { Some(x) => { write_unsigned(w, (*x) as u64); return; } None => {} }
+    text(w, "null");
+}
+
+static fn write_unsigned(w: *Writer, n: u64) {
+    if n >= 10 {
+        write_unsigned(w, n / 10);
+    }
+    w.out.push(digit_char(n % 10));
+}
+
+static fn write_signed(w: *Writer, n: i64) {
+    if n < 0 {
+        w.out.push('-');
+        // one less than the magnitude cannot overflow, even for the least
+        // value
+        write_unsigned(w, ((-(n + 1)) as u64) + 1);
+    } else {
+        write_unsigned(w, n as u64);
+    }
+}
+
+static fn digit_char(d: u64) -> char {
+    ((48 + d) as u32) as char
+}
+
+/// The shortest numeral that reads back as `x`: as an `f32` when `single`.
+static fn write_float(w: *Writer, x: f64, single: bool) {
+    if x != x {
+        text(w, "nan");
+        return;
+    }
+    if x - x != 0.0 {
+        text(w, if x > 0.0 { "inf" } else { "-inf" });
+        return;
+    }
+    let a = x;
+    if x < 0.0 || (x == 0.0 && 1.0 / x < 0.0) {
+        w.out.push('-');
+        a = -x;
+    }
+    if a == 0.0 {
+        text(w, "0.0");
+        return;
+    }
+    let buf: [u8; 40] = [0; 40];
+    let most = if single { 9 } else { 17 };
+    let count: i32 = 1;
+    let point: i32 = 0;
+    loop {
+        point = __float_digits(a, count, &buf);
+        if count >= most || reads_back(&buf, count, point, a, single) {
+            break;
+        }
+        count++;
+    }
+    let n = count as usize;
+    while n > 1 && buf[n - 1] == 48 {
+        n--;
+    }
+    // the value is 0.d1d2…dn times ten to the `point`
+    if point > -5 && point <= 17 {
+        if point <= 0 {
+            text(w, "0.");
+            for _ in 0..((-point) as usize) {
+                w.out.push('0');
+            }
+            push_digits(w, &buf, 0, n);
+        } else if (point as usize) >= n {
+            push_digits(w, &buf, 0, n);
+            for _ in 0..((point as usize) - n) {
+                w.out.push('0');
+            }
+            text(w, ".0");
+        } else {
+            push_digits(w, &buf, 0, point as usize);
+            w.out.push('.');
+            push_digits(w, &buf, point as usize, n);
+        }
+    } else {
+        push_digits(w, &buf, 0, 1);
+        w.out.push('.');
+        if n > 1 {
+            push_digits(w, &buf, 1, n);
+        } else {
+            w.out.push('0');
+        }
+        w.out.push('e');
+        write_signed(w, (point - 1) as i64);
+    }
+}
+
+static fn push_digits(w: *Writer, buf: *const [u8; 40], from: usize, to: usize) {
+    for i in from..to {
+        w.out.push((buf[i] as u32) as char);
+    }
+}
+
+/// Whether the first `count` digits, with the point where `point` says,
+/// read back as `a`.
+static fn reads_back(buf: *const [u8; 40], count: i32, point: i32, a: f64, single: bool) -> bool {
+    // `0.`, the digits, `e` and the exponent, as the bytes of a numeral
+    let t: [u8] = [48, 46];
+    for i in 0..(count as usize) {
+        t.push(buf[i]);
+    }
+    t.push(101);
+    let e = writing("");
+    write_signed(&e, point as i64);
+    for c in &e.out {
+        t.push(((*c) as u32) as u8);
+    }
+    t.push(0);
+    let back = __parse_float(&t);
+    if single { (back as f32) as f64 == a } else { back == a }
+}
+
+static fn write_char(w: *Writer, c: char) {
+    w.out.push('\'');
+    escape(w, c, '\'');
+    w.out.push('\'');
+}
+
+static fn write_string(w: *Writer, s: *const [char]) {
+    w.out.push('"');
+    for c in s {
+        escape(w, *c, '"');
+    }
+    w.out.push('"');
+}
+
+static fn escape(w: *Writer, c: char, quote: char) {
+    if c == quote || c == '\\' {
+        w.out.push('\\');
+        w.out.push(c);
+    } else if c == '\n' {
+        text(w, "\\n");
+    } else if c == '\t' {
+        text(w, "\\t");
+    } else if c == '\r' {
+        text(w, "\\r");
+    } else if c == '\0' {
+        text(w, "\\0");
+    } else if (c as u32) < 32 || (c as u32) == 127 {
+        text(w, "\\u{");
+        write_hex(w, c as u32);
+        w.out.push('}');
+    } else {
+        w.out.push(c);
+    }
+}
+
+static fn write_hex(w: *Writer, n: u32) {
+    if n >= 16 {
+        write_hex(w, n / 16);
+    }
+    let d = n % 16;
+    w.out.push(if d < 10 { ((48 + d) as u32) as char } else { ((87 + d) as u32) as char });
+}
+
+/////////////
+// READING //
+/////////////
+
+/// A document as a `T`.
+fn parse<T>(src: *const [char]) -> Result<T, Error> {
+    let d = __dyn_make(@typeinfo(T));
+    parse_into(src, __dyn_view(&d))?;
+    Ok(__dyn_take(d))
+}
+
+/// A document read into the value `p` refers to, whose bytes are all zero,
+/// as the type of the table `p` carries.
+fn parse_into(src: *const [char], p: *any) -> Result<(), Error> {
+    let r = Reader { src: src, at: 0, line: 1, col: 1, spots: [] };
+    let v = read_document(&r)?;
+    bind_value(&v, p, &r.spots, 0)
+}
+
+/// A document as a tree.
+fn parse_dyn(src: *const [char]) -> Result<Value, Error> {
+    let r = Reader { src: src, at: 0, line: 1, col: 1, spots: [] };
+    read_document(&r)
+}
+
+/// The tree `v` as a `T`.
+fn bind<T>(v: *const Value) -> Result<T, Error> {
+    let d = __dyn_make(@typeinfo(T));
+    bind_into(v, __dyn_view(&d))?;
+    Ok(__dyn_take(d))
+}
+
+/// The tree `v` read into the value `p` refers to, whose bytes are all zero,
+/// as the type of the table `p` carries.
+fn bind_into(v: *const Value, p: *any) -> Result<(), Error> {
+    bind_value(v, p, &[], 0)
+}
+
+/// Reads a document. `spots` gets where each value of the tree starts, in
+/// the order a walk of the tree meets them, each value before its parts.
+struct Reader { src: *const [char], at: usize, line: u32, col: u32, spots: [(u32, u32)] }
+
+static fn read_document(r: *Reader) -> Result<Value, Error> {
+    let v = read_value(r)?;
+    skip_space(r)?;
+    if r.at < r.src.len() {
+        return Err(fail_at(r, "the document goes on after its value"));
+    }
+    Ok(v)
+}
+
+static fn read_value(r: *Reader) -> Result<Value, Error> {
+    skip_space(r)?;
+    r.spots.push((r.line, r.col));
+    let c = match peek(r) {
+        Some(c) => c,
+        None => { return Err(fail_at(r, "the document ends where a value should be")); }
+    };
+    if c == '[' {
+        next(r);
+        let items: [Value] = [];
+        loop {
+            skip_space(r)?;
+            if is(peek(r), ']') {
+                next(r);
+                return Ok(Value::Arr(items));
+            }
+            items.push(read_value(r)?);
+            skip_space(r)?;
+            match next(r) {
+                Some(',') => {}
+                Some(']') => { return Ok(Value::Arr(items)); }
+                _ => { return Err(fail_at(r, "an array's elements are separated by \",\" and it ends with \"]\"")); }
+            }
+        }
+    }
+    if c == '{' {
+        return read_pairs(r, []);
+    }
+    if c == '"' {
+        return Ok(Value::Str(read_string(r)?));
+    }
+    if c == 'r' && (is(peek_at(r, 1), '"') || is(peek_at(r, 1), '#')) {
+        return Ok(Value::Str(read_raw_string(r)?));
+    }
+    if c == '\'' {
+        next(r);
+        let ch = read_char_in(r, '\'')?;
+        if !is(next(r), '\'') {
+            return Err(fail_at(r, "a character is one character between single quotes"));
+        }
+        return Ok(Value::Str(string { chars: [ch] }));
+    }
+    if is_digit(c) || c == '-' || c == '+' {
+        return read_number(r);
+    }
+    if is_ident_start(c) {
+        return read_named(r);
+    }
+    Err(fail_at(r, "a value starts with a number, a character, a string, \"[\", \"{\", or a name"))
+}
+
+/// `{ name: value, … }`, after anything already read into `pairs`.
+static fn read_pairs(r: *Reader, pairs: [(string, Value)]) -> Result<Value, Error> {
+    if !is(next(r), '{') {
+        return Err(fail_at(r, "an object starts with \"{\""));
+    }
+    loop {
+        skip_space(r)?;
+        if is(peek(r), '}') {
+            next(r);
+            return Ok(Value::Obj(pairs));
+        }
+        let name = read_ident(r);
+        if name.len() == 0 {
+            return Err(fail_at(r, "each field of an object is written name: value"));
+        }
+        skip_space(r)?;
+        if !is(next(r), ':') {
+            return Err(fail_at(r, "a field's name is followed by \":\" and its value"));
+        }
+        let v = read_value(r)?;
+        pairs.push((name, v));
+        skip_space(r)?;
+        match next(r) {
+            Some(',') => {}
+            Some('}') => { return Ok(Value::Obj(pairs)); }
+            _ => { return Err(fail_at(r, "an object's fields are separated by \",\" and it ends with \"}\"")); }
+        }
+    }
+}
+
+/// A name: `true`, `false`, `null`, `nan` or `inf`, or a path naming a type
+/// or variant, with what follows it.
+static fn read_named(r: *Reader) -> Result<Value, Error> {
+    let (line, col) = (r.line, r.col);
+    let path = read_ident(r);
+    while is(peek(r), ':') && is(peek_at(r, 1), ':') {
+        next(r);
+        next(r);
+        path.push(':');
+        path.push(':');
+        let more = read_ident(r);
+        if more.len() == 0 {
+            return Err(fail_at(r, "a path continues with a name after \"::\""));
+        }
+        for c in &more {
+            path.push(*c);
+        }
+    }
+    if __text_eq(&path, "true") { return Ok(Value::Bool(true)); }
+    if __text_eq(&path, "false") { return Ok(Value::Bool(false)); }
+    if __text_eq(&path, "null") { return Ok(Value::Null); }
+    if __text_eq(&path, "nan") || __text_eq(&path, "inf") { return Ok(Value::Float(special(&path, false))); }
+    // the name is a value of the tree of its own, placed where it was
+    let pairs: [(string, Value)] = [];
+    skip_space(r)?;
+    if is(peek(r), '{') {
+        r.spots.push((line, col));
+        pairs.push(("$type", Value::Str(path)));
+        return read_pairs(r, pairs);
+    }
+    r.spots.push((line, col));
+    pairs.push(("$variant", Value::Str(path)));
+    if is(peek(r), '(') {
+        next(r);
+        let i: u64 = 0;
+        loop {
+            skip_space(r)?;
+            if is(peek(r), ')') {
+                next(r);
+                break;
+            }
+            let v = read_value(r)?;
+            let name = writing("");
+            write_unsigned(&name, i);
+            pairs.push((name.out, v));
+            i++;
+            skip_space(r)?;
+            match next(r) {
+                Some(',') => {}
+                Some(')') => { break; }
+                _ => { return Err(fail_at(r, "a variant's values are separated by \",\" and end with \")\"")); }
+            }
+        }
+    }
+    Ok(Value::Obj(pairs))
+}
+
+static fn read_number(r: *Reader) -> Result<Value, Error> {
+    let negative = false;
+    if is(peek(r), '-') {
+        negative = true;
+        next(r);
+    } else if is(peek(r), '+') {
+        next(r);
+    }
+    match peek(r) {
+        Some(c) => {
+            if is_ident_start(c) {
+                let name = read_ident(r);
+                if __text_eq(&name, "inf") || __text_eq(&name, "nan") {
+                    return Ok(Value::Float(special(&name, negative)));
+                }
+                return Err(fail_at(r, "a sign is followed by a number"));
+            }
+        }
+        None => { return Err(fail_at(r, "a sign is followed by a number")); }
+    }
+    let radix: u64 = 10;
+    if is(peek(r), '0') {
+        match peek_at(r, 1) {
+            Some('x') => radix = 16,
+            Some('b') => radix = 2,
+            Some('o') => radix = 8,
+            _ => {}
+        }
+        if radix != 10 {
+            next(r);
+            next(r);
+        }
+    }
+    // the digits, as characters, and as the numeral a float reads from
+    let numeral: [u8] = [];
+    if negative {
+        numeral.push(45);
+    }
+    let value: u64 = 0;
+    let digits = 0;
+    let too_big = false;
+    let float = false;
+    loop {
+        let c = match peek(r) { Some(c) => c, None => { break; } };
+        if c == '_' {
+            next(r);
+            continue;
+        }
+        let d = digit_value(c);
+        if d >= radix {
+            break;
+        }
+        next(r);
+        digits++;
+        numeral.push((c as u32) as u8);
+        match checked_mul(value, radix) {
+            Some(m) => match checked_add(m, d) {
+                Some(s) => value = s,
+                None => too_big = true,
+            },
+            None => too_big = true,
+        }
+    }
+    if digits == 0 {
+        return Err(fail_at(r, "a number has at least one digit"));
+    }
+    if radix == 10 {
+        if is(peek(r), '.') && is_digit_opt(peek_at(r, 1)) {
+            float = true;
+            next(r);
+            numeral.push(46);
+            loop {
+                let c = match peek(r) { Some(c) => c, None => { break; } };
+                if c == '_' { next(r); continue; }
+                if !is_digit(c) { break; }
+                next(r);
+                numeral.push((c as u32) as u8);
+            }
+        }
+        if is(peek(r), 'e') || is(peek(r), 'E') {
+            float = true;
+            next(r);
+            numeral.push(101);
+            if is(peek(r), '-') || is(peek(r), '+') {
+                numeral.push((next_char(r) as u32) as u8);
+            }
+            let exponent_digits = 0;
+            loop {
+                let c = match peek(r) { Some(c) => c, None => { break; } };
+                if c == '_' { next(r); continue; }
+                if !is_digit(c) { break; }
+                next(r);
+                exponent_digits++;
+                numeral.push((c as u32) as u8);
+            }
+            if exponent_digits == 0 {
+                return Err(fail_at(r, "an exponent has at least one digit"));
+            }
+        }
+    }
+    // a suffix naming the type, as in `5u8` or `1.0f32`, says nothing a
+    // document needs
+    let suffix = read_ident(r);
+    if suffix.len() > 0 && !is_type_suffix(&suffix) {
+        return Err(fail_at(r, "a number ends at its digits, or with its type, as in 5u8"));
+    }
+    if float || __text_eq(&suffix, "f32") || __text_eq(&suffix, "f64") {
+        numeral.push(0);
+        return Ok(Value::Float(__parse_float(&numeral)));
+    }
+    let limit: u64 = 9223372036854775807;
+    if too_big || value > limit + (if negative { 1 } else { 0 }) {
+        return Err(fail_at(r, "an integer in a document read without a type is an i64, and this one is outside its range"));
+    }
+    if negative {
+        if value == limit + 1 {
+            return Ok(Value::Int(-(limit as i64) - 1));
+        }
+        return Ok(Value::Int(-(value as i64)));
+    }
+    Ok(Value::Int(value as i64))
+}
+
+static fn is_type_suffix(s: *const [char]) -> bool {
+    __text_eq(s, "i8") || __text_eq(s, "i16") || __text_eq(s, "i32") || __text_eq(s, "i64")
+        || __text_eq(s, "u8") || __text_eq(s, "u16") || __text_eq(s, "u32") || __text_eq(s, "u64")
+        || __text_eq(s, "isize") || __text_eq(s, "usize") || __text_eq(s, "f32") || __text_eq(s, "f64")
+}
+
+static fn special(name: *const [char], negative: bool) -> f64 {
+    let t: [u8] = [];
+    if negative {
+        t.push(45);
+    }
+    for c in name {
+        t.push(((*c) as u32) as u8);
+    }
+    t.push(0);
+    __parse_float(&t)
+}
+
+static fn read_string(r: *Reader) -> Result<[char], Error> {
+    next(r);
+    let s: [char] = [];
+    loop {
+        match peek(r) {
+            None => { return Err(fail_at(r, "a string ends with a double quote")); }
+            Some('"') => {
+                next(r);
+                return Ok(s);
+            }
+            Some(_) => s.push(read_char_in(r, '"')?),
+        }
+    }
+}
+
+/// `r"…"` or `r#"…"#`, with as many `#`s at the end as at the start, and no
+/// escapes.
+static fn read_raw_string(r: *Reader) -> Result<[char], Error> {
+    next(r);
+    let hashes = 0;
+    while is(peek(r), '#') {
+        next(r);
+        hashes++;
+    }
+    if !is(next(r), '"') {
+        return Err(fail_at(r, "a raw string starts with r or r#, then a double quote"));
+    }
+    let s: [char] = [];
+    loop {
+        let c = match next(r) {
+            Some(c) => c,
+            None => { return Err(fail_at(r, "a raw string ends with a double quote and as many #s as it started with")); }
+        };
+        if c == '"' {
+            let n = 0;
+            while n < hashes && is(peek_at(r, n), '#') {
+                n++;
+            }
+            if n == hashes {
+                for _ in 0..n {
+                    next(r);
+                }
+                return Ok(s);
+            }
+        }
+        s.push(c);
+    }
+}
+
+/// One character of a string or character literal, escapes read.
+static fn read_char_in(r: *Reader, quote: char) -> Result<char, Error> {
+    let c = match next(r) {
+        Some(c) => c,
+        None => { return Err(fail_at(r, "the document ends inside a literal")); }
+    };
+    if c == quote {
+        return Err(fail_at(r, "a character literal holds one character"));
+    }
+    if c != '\\' {
+        return Ok(c);
+    }
+    match next(r) {
+        Some('n') => Ok('\n'),
+        Some('t') => Ok('\t'),
+        Some('r') => Ok('\r'),
+        Some('0') => Ok('\0'),
+        Some('\\') => Ok('\\'),
+        Some('\'') => Ok('\''),
+        Some('"') => Ok('"'),
+        Some('u') => {
+            if !is(next(r), '{') {
+                return Err(fail_at(r, "a \\u escape is written \\u{hex digits}"));
+            }
+            let n: u32 = 0;
+            let count = 0;
+            loop {
+                let c = match next(r) {
+                    Some(c) => c,
+                    None => { return Err(fail_at(r, "a \\u escape ends with \"}\"")); }
+                };
+                if c == '}' {
+                    break;
+                }
+                let d = digit_value(c);
+                if d >= 16 || count == 6 {
+                    return Err(fail_at(r, "a \\u escape holds one to six hexadecimal digits"));
+                }
+                n = n * 16 + (d as u32);
+                count++;
+            }
+            if count == 0 || n > 1114111 || (n >= 55296 && n <= 57343) {
+                return Err(fail_at(r, "a \\u escape names a Unicode scalar value"));
+            }
+            Ok(n as char)
+        }
+        _ => Err(fail_at(r, "the escapes are \\n, \\t, \\r, \\0, \\\\, \\', \\\" and \\u{…}")),
+    }
+}
+
+static fn read_ident(r: *Reader) -> [char] {
+    let s: [char] = [];
+    match peek(r) {
+        Some(c) => {
+            if !is_ident_start(c) {
+                return s;
+            }
+        }
+        None => { return s; }
+    }
+    loop {
+        match peek(r) {
+            Some(c) => {
+                if is_ident_start(c) || is_digit(c) {
+                    s.push(c);
+                    next(r);
+                } else {
+                    return s;
+                }
+            }
+            None => { return s; }
+        }
+    }
+}
+
+/// Skips spaces and comments: `// …` to the end of the line, and `/* … */`,
+/// which may nest.
+static fn skip_space(r: *Reader) -> Result<(), Error> {
+    loop {
+        let c = match peek(r) { Some(c) => c, None => { return Ok(()); } };
+        if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+            next(r);
+        } else if c == '/' && is(peek_at(r, 1), '/') {
+            while peek(r).is_some() && !is(peek(r), '\n') {
+                next(r);
+            }
+        } else if c == '/' && is(peek_at(r, 1), '*') {
+            next(r);
+            next(r);
+            let depth = 1;
+            while depth > 0 {
+                match next(r) {
+                    None => { return Err(fail_at(r, "a comment opened with /* is closed with */")); }
+                    Some('*') => if is(peek(r), '/') { next(r); depth--; },
+                    Some('/') => if is(peek(r), '*') { next(r); depth++; },
+                    Some(_) => {}
+                }
+            }
+        } else {
+            return Ok(());
+        }
+    }
+}
+
+static fn peek(r: *const Reader) -> char? {
+    peek_at(r, 0)
+}
+
+static fn peek_at(r: *const Reader, ahead: usize) -> char? {
+    if r.at + ahead < r.src.len() { Some(r.src[r.at + ahead]) } else { None }
+}
+
+static fn next(r: *Reader) -> char? {
+    if r.at >= r.src.len() {
+        return None;
+    }
+    let c = r.src[r.at];
+    r.at++;
+    if c == '\n' {
+        r.line++;
+        r.col = 1;
+    } else {
+        r.col++;
+    }
+    Some(c)
+}
+
+/// The next character.
+static fn next_char(r: *Reader) -> char {
+    match next(r) { Some(c) => c, None => ' ' }
+}
+
+static fn fail_at(r: *const Reader, detail: *const [char]) -> Error {
+    Error { line: r.line, col: r.col, detail: clone(detail) }
+}
+
+static fn is_digit(c: char) -> bool {
+    c >= '0' && c <= '9'
+}
+
+/// Whether `c` is the character `want`.
+static fn is(c: char?, want: char) -> bool {
+    match c { Some(x) => x == want, None => false }
+}
+
+static fn is_digit_opt(c: char?) -> bool {
+    match c { Some(c) => is_digit(c), None => false }
+}
+
+static fn is_ident_start(c: char) -> bool {
+    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+}
+
+/// The value of a digit in any base up to 16, or 99 for anything else.
+static fn digit_value(c: char) -> u64 {
+    if is_digit(c) { return ((c as u32) - 48) as u64; }
+    if c >= 'a' && c <= 'f' { return ((c as u32) - 87) as u64; }
+    if c >= 'A' && c <= 'F' { return ((c as u32) - 55) as u64; }
+    99
+}
+
+////////////////////////////////////
+// CHECKING A TREE AGAINST A TYPE //
+////////////////////////////////////
+
+/// `v` read into what `p` refers to. `at` is `v`'s position among `spots`.
+static fn bind_value(v: *const Value, p: *any, spots: *const [(u32, u32)], at: usize) -> Result<(), Error> {
+    let ti = @typeinfo_of(p);
+    match p as *string {
+        Some(s) => {
+            return match v {
+                Value::Str(text) => {
+                    *s = clone(text);
+                    Ok(())
+                }
+                _ => Err(mismatch(spots, at, ti, "a string")),
+            };
+        }
+        None => {}
+    }
+    for m in ti.methods {
+        if __text_eq(m.name, "from_tcon") && __same_type(m.sig, @typeinfo(fn(*any, *const Value) -> Result<(), Error>)) {
+            return invoke::<fn(*any, *const Value) -> Result<(), Error>>(m.addr, p, v);
+        }
+    }
+    match ti.kind {
+        TypeKind::Scalar => bind_scalar(v, p, ti, spots, at),
+        TypeKind::Struct => bind_struct(v, p, ti, spots, at),
+        TypeKind::Tuple => match v {
+            Value::Arr(items) => {
+                if items.len() != ti.fields.len() {
+                    return Err(mismatch(spots, at, ti, "an array of one value for each element of the tuple"));
+                }
+                let child = at + 1;
+                for i in 0..items.len() {
+                    let f = &ti.fields[i];
+                    bind_value(&items[i], __field_at(p, f.offset, f.ty), spots, child)?;
+                    child += nodes(&items[i]);
+                }
+                Ok(())
+            }
+            _ => Err(mismatch(spots, at, ti, "an array")),
+        },
+        TypeKind::Array => {
+            let (addr, _) = @raw_parts(p);
+            match v {
+                Value::Str(s) => {
+                    if __same_type(ti.elem, @typeinfo(char)) && s.len() == ti.len {
+                        let cs: *[char] = @from_raw_parts(addr, s.len());
+                        for i in 0..s.len() {
+                            cs[i] = s[i];
+                        }
+                        return Ok(());
+                    }
+                    Err(mismatch(spots, at, ti, "an array of the type's length"))
+                }
+                Value::Arr(items) => {
+                    if items.len() != ti.len {
+                        return Err(mismatch(spots, at, ti, "an array of the type's length"));
+                    }
+                    bind_elements(items, addr, ti.elem, spots, at)
+                }
+                _ => Err(mismatch(spots, at, ti, "an array")),
+            }
+        }
+        TypeKind::DynArray => match v {
+            Value::Str(s) => {
+                if !__same_type(ti.elem, @typeinfo(char)) {
+                    return Err(mismatch(spots, at, ti, "an array"));
+                }
+                let first = __grow_zeroed(p, s.len());
+                let (addr, _) = @raw_parts(first);
+                let cs: *[char] = @from_raw_parts(addr, s.len());
+                for i in 0..s.len() {
+                    cs[i] = s[i];
+                }
+                Ok(())
+            }
+            Value::Arr(items) => {
+                let first = __grow_zeroed(p, items.len());
+                let (addr, _) = @raw_parts(first);
+                bind_elements(items, addr, ti.elem, spots, at)
+            }
+            _ => Err(mismatch(spots, at, ti, "an array")),
+        },
+        TypeKind::Enum => bind_variant(v, p, ti, spots, at),
+        TypeKind::Void => match v {
+            Value::Null => Ok(()),
+            _ => Err(mismatch(spots, at, ti, "null")),
+        },
+        _ => Err(mismatch(spots, at, ti, "nothing: a value of this type cannot be read from a document")),
+    }
+}
+
+static fn bind_elements(items: *const [Value], addr: usize, elem: *const TypeInfo, spots: *const [(u32, u32)], at: usize) -> Result<(), Error> {
+    let child = at + 1;
+    for i in 0..items.len() {
+        let e: *any = @from_raw_parts(addr + i * elem.size, elem);
+        bind_value(&items[i], e, spots, child)?;
+        child += nodes(&items[i]);
+    }
+    Ok(())
+}
+
+static fn bind_struct(v: *const Value, p: *any, ti: *const TypeInfo, spots: *const [(u32, u32)], at: usize) -> Result<(), Error> {
+    let pairs = match v {
+        Value::Obj(pairs) => pairs,
+        _ => { return Err(mismatch(spots, at, ti, "an object")); }
+    };
+    let open = has_annot(ti, "tcon", "open");
+    // each pair's position among `spots`
+    let child = at + 1;
+    let spot_of: [usize] = [];
+    for k in 0..pairs.len() {
+        spot_of.push(child);
+        child += nodes(&pairs[k].1);
+    }
+    for k in 0..pairs.len() {
+        let name = &pairs[k].0;
+        if __text_eq(name, "$type") {
+            match &pairs[k].1 {
+                Value::Str(path) => {
+                    if !names_type(path, ti.name) {
+                        let d = writing("the document names \"");
+                        text(&d, path);
+                        text(&d, "\" where the type ");
+                        text(&d, ti.name);
+                        text(&d, " is expected");
+                        return Err(located(spots, spot_of[k], d.out));
+                    }
+                }
+                _ => {}
+            }
+        } else if !has_field(ti, name) && !open {
+            let d = writing(ti.name);
+            text(&d, " has no field \"");
+            text(&d, name);
+            text(&d, "\", and is not [tcon: open]");
+            return Err(located(spots, spot_of[k], d.out));
+        }
+    }
+    for f in ti.fields {
+        let found = false;
+        for k in 0..pairs.len() {
+            if __text_eq(&pairs[k].0, f.name) {
+                found = true;
+                bind_value(&pairs[k].1, __field_at(p, f.offset, f.ty), spots, spot_of[k])?;
+                break;
+            }
+        }
+        if !found {
+            let place = __field_at(p, f.offset, f.ty);
+            if is_opt(f.ty) {
+                write_tag(place, f.ty, variant_named(f.ty, "None"));
+            } else {
+                let d = writing("the field ");
+                text(&d, f.name);
+                text(&d, " of ");
+                text(&d, ti.name);
+                text(&d, " is missing");
+                return Err(located(spots, at, d.out));
+            }
+        }
+    }
+    Ok(())
+}
+
+static fn bind_variant(v: *const Value, p: *any, ti: *const TypeInfo, spots: *const [(u32, u32)], at: usize) -> Result<(), Error> {
+    if is_opt(ti) {
+        match v {
+            Value::Null => {
+                write_tag(p, ti, variant_named(ti, "None"));
+                return Ok(());
+            }
+            _ => {
+                let some = variant_named(ti, "Some");
+                write_tag(p, ti, some);
+                let f = &ti.variants[some].fields[0];
+                return bind_value(v, __field_at(p, f.offset, f.ty), spots, at);
+            }
+        }
+    }
+    let pairs = match v {
+        Value::Obj(pairs) => pairs,
+        _ => { return Err(mismatch(spots, at, ti, "one of its variants")); }
+    };
+    let path: *const [char] = "";
+    if pairs.len() > 0 && (__text_eq(&pairs[0].0, "$variant") || __text_eq(&pairs[0].0, "$type")) {
+        match &pairs[0].1 {
+            Value::Str(s) => path = s,
+            _ => {}
+        }
+    }
+    let name = last_segment(path);
+    let index = ti.variants.len();
+    for i in 0..ti.variants.len() {
+        if __text_eq(ti.variants[i].name, name) {
+            index = i;
+        }
+    }
+    if index == ti.variants.len() {
+        let d = writing(ti.name);
+        text(&d, " has no variant \"");
+        text(&d, name);
+        text(&d, "\"");
+        return Err(located(spots, at, d.out));
+    }
+    write_tag(p, ti, index);
+    let var = &ti.variants[index];
+    let given = pairs.len() - 1;
+    if given != var.fields.len() {
+        let d = writing("the variant ");
+        text(&d, name);
+        text(&d, " carries a different number of values");
+        return Err(located(spots, at, d.out));
+    }
+    let child = at + 1 + nodes(&pairs[0].1);
+    for k in 1..pairs.len() {
+        let target = var.fields.len();
+        for i in 0..var.fields.len() {
+            let f = &var.fields[i];
+            if f.name.len() == 0 {
+                if i + 1 == k {
+                    target = i;
+                }
+            } else if __text_eq(f.name, &pairs[k].0) {
+                target = i;
+            }
+        }
+        if target == var.fields.len() {
+            let d = writing("the variant ");
+            text(&d, name);
+            text(&d, " has no field \"");
+            text(&d, &pairs[k].0);
+            text(&d, "\"");
+            return Err(located(spots, child, d.out));
+        }
+        let f = &var.fields[target];
+        bind_value(&pairs[k].1, __field_at(p, f.offset, f.ty), spots, child)?;
+        child += nodes(&pairs[k].1);
+    }
+    Ok(())
+}
+
+static fn bind_scalar(v: *const Value, p: *any, ti: *const TypeInfo, spots: *const [(u32, u32)], at: usize) -> Result<(), Error> {
+    match p as *bool {
+        Some(r) => match v {
+            Value::Bool(b) => { *r = b; return Ok(()); }
+            _ => { return Err(mismatch(spots, at, ti, "true or false")); }
+        },
+        None => {}
+    }
+    match p as *char {
+        Some(r) => match v {
+            Value::Str(s) => {
+                if s.len() == 1 {
+                    *r = s[0];
+                    return Ok(());
+                }
+                return Err(mismatch(spots, at, ti, "one character"));
+            }
+            _ => { return Err(mismatch(spots, at, ti, "a character")); }
+        },
+        None => {}
+    }
+    let (x, is_int, n) = match v {
+        Value::Float(x) => (x, false, 0),
+        Value::Int(n) => (n as f64, true, n),
+        _ => { return Err(mismatch(spots, at, ti, "a number")); }
+    };
+    match p as *f64 { Some(r) => { *r = x; return Ok(()); } None => {} }
+    match p as *f32 { Some(r) => { *r = x as f32; return Ok(()); } None => {} }
+    if !is_int {
+        return Err(mismatch(spots, at, ti, "an integer"));
+    }
+    match p as *i8 { Some(r) => { check_fits(n, -128, 127, spots, at, ti)?; *r = n as i8; return Ok(()); } None => {} }
+    match p as *i16 { Some(r) => { check_fits(n, -32768, 32767, spots, at, ti)?; *r = n as i16; return Ok(()); } None => {} }
+    match p as *i32 { Some(r) => { check_fits(n, -2147483648, 2147483647, spots, at, ti)?; *r = n as i32; return Ok(()); } None => {} }
+    match p as *i64 { Some(r) => { *r = n; return Ok(()); } None => {} }
+    match p as *isize { Some(r) => { *r = n as isize; return Ok(()); } None => {} }
+    match p as *u8 { Some(r) => { check_fits(n, 0, 255, spots, at, ti)?; *r = n as u8; return Ok(()); } None => {} }
+    match p as *u16 { Some(r) => { check_fits(n, 0, 65535, spots, at, ti)?; *r = n as u16; return Ok(()); } None => {} }
+    match p as *u32 { Some(r) => { check_fits(n, 0, 4294967295, spots, at, ti)?; *r = n as u32; return Ok(()); } None => {} }
+    match p as *u64 { Some(r) => { check_fits(n, 0, 9223372036854775807, spots, at, ti)?; *r = n as u64; return Ok(()); } None => {} }
+    match p as *usize { Some(r) => { check_fits(n, 0, 9223372036854775807, spots, at, ti)?; *r = n as usize; return Ok(()); } None => {} }
+    Err(mismatch(spots, at, ti, "a value of its type"))
+}
+
+static fn check_fits(n: i64, low: i64, high: i64, spots: *const [(u32, u32)], at: usize, ti: *const TypeInfo) -> Result<(), Error> {
+    if n < low || n > high {
+        let d = writing("");
+        write_signed(&d, n);
+        text(&d, " does not fit in the type ");
+        text(&d, ti.name);
+        return Err(located(spots, at, d.out));
+    }
+    Ok(())
+}
+
+/// How many values of the tree `v` is, itself included.
+static fn nodes(v: *const Value) -> usize {
+    match v {
+        Value::Arr(items) => {
+            let n = 1;
+            for i in items {
+                n += nodes(i);
+            }
+            n
+        }
+        Value::Obj(pairs) => {
+            let n = 1;
+            for pair in pairs {
+                n += nodes(&pair.1);
+            }
+            n
+        }
+        _ => 1,
+    }
+}
+
+////////////
+// TABLES //
+////////////
+
+static fn read_tag(p: *const any, ti: *const TypeInfo) -> usize {
+    if ti.tag_size == 1 {
+        return match __field_at(p, ti.tag_offset, @typeinfo(u8)) as *const u8 { Some(t) => (*t) as usize, None => 0 };
+    }
+    if ti.tag_size == 2 {
+        return match __field_at(p, ti.tag_offset, @typeinfo(u16)) as *const u16 { Some(t) => (*t) as usize, None => 0 };
+    }
+    if ti.tag_size == 4 {
+        return match __field_at(p, ti.tag_offset, @typeinfo(u32)) as *const u32 { Some(t) => (*t) as usize, None => 0 };
+    }
+    match __field_at(p, ti.tag_offset, @typeinfo(u64)) as *const u64 { Some(t) => (*t) as usize, None => 0 }
+}
+
+static fn write_tag(p: *any, ti: *const TypeInfo, tag: usize) {
+    if ti.tag_size == 1 {
+        match __field_at(p, ti.tag_offset, @typeinfo(u8)) as *u8 { Some(t) => *t = tag as u8, None => {} }
+    } else if ti.tag_size == 2 {
+        match __field_at(p, ti.tag_offset, @typeinfo(u16)) as *u16 { Some(t) => *t = tag as u16, None => {} }
+    } else if ti.tag_size == 4 {
+        match __field_at(p, ti.tag_offset, @typeinfo(u32)) as *u32 { Some(t) => *t = tag as u32, None => {} }
+    } else {
+        match __field_at(p, ti.tag_offset, @typeinfo(u64)) as *u64 { Some(t) => *t = tag as u64, None => {} }
+    }
+}
+
+/// The address and length of the growable array `p` refers to.
+static fn growable_parts(p: *const any) -> (usize, usize) {
+    let at = match __field_at(p, 0, @typeinfo(usize)) as *const usize { Some(a) => *a, None => 0 };
+    let n = match __field_at(p, 8, @typeinfo(usize)) as *const usize { Some(a) => *a, None => 0 };
+    (at, n)
+}
+
+static fn is_opt(ti: *const TypeInfo) -> bool {
+    ti.kind == TypeKind::Enum && starts_with(ti.name, "core::Opt<")
+}
+
+static fn variant_named(ti: *const TypeInfo, name: *const [char]) -> usize {
+    for i in 0..ti.variants.len() {
+        if __text_eq(ti.variants[i].name, name) {
+            return i;
+        }
+    }
+    0
+}
+
+static fn has_field(ti: *const TypeInfo, name: *const [char]) -> bool {
+    for f in ti.fields {
+        if __text_eq(f.name, name) {
+            return true;
+        }
+    }
+    false
+}
+
+static fn has_annot(ti: *const TypeInfo, name: *const [char], value: *const [char]) -> bool {
+    for a in ti.annots {
+        if __text_eq(a.name, name) && __text_eq(a.value, value) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the path a document wrote names the type called `qualified`: the
+/// whole name, or its last part.
+static fn names_type(path: *const [char], qualified: *const [char]) -> bool {
+    __text_eq(path, qualified) || __text_eq(last_segment(path), last_segment(qualified))
+}
+
+/// The part of a path after its last `::`, ignoring any inside `<…>`.
+static fn last_segment(path: *const [char]) -> *const [char] {
+    let start = 0;
+    let depth = 0;
+    for i in 0..path.len() {
+        if path[i] == '<' { depth++; }
+        if path[i] == '>' && depth > 0 { depth--; }
+        if depth == 0 && path[i] == ':' && i + 1 < path.len() && path[i + 1] == ':' {
+            start = i + 2;
+        }
+    }
+    let (addr, _) = @raw_parts(path);
+    @from_raw_parts(addr + start * 4, path.len() - start)
+}
+
+////////////
+// ERRORS //
+////////////
+
+static fn located(spots: *const [(u32, u32)], at: usize, detail: [char]) -> Error {
+    if at < spots.len() {
+        let (line, col) = spots[at];
+        Error { line: line, col: col, detail: detail }
+    } else {
+        Error { line: 0, col: 0, detail: detail }
+    }
+}
+
+static fn mismatch(spots: *const [(u32, u32)], at: usize, ti: *const TypeInfo, wanted: *const [char]) -> Error {
+    let d = writing("a value of type ");
+    text(&d, ti.name);
+    text(&d, " is read from ");
+    text(&d, wanted);
+    located(spots, at, d.out)
+}
+
+//////////
+// TEXT //
+//////////
+
+/// Appends text to what `w` has written. A growable array cannot be grown
+/// through a reference, so text is written through the writer holding it.
+static fn text(w: *Writer, s: *const [char]) {
+    for c in s {
+        w.out.push(*c);
+    }
+}
+
+/// A writer that has written `s`.
+static fn writing(s: *const [char]) -> Writer {
+    Writer { out: clone(s), pairs: [] }
+}
+
+static fn starts_with(s: *const [char], prefix: *const [char]) -> bool {
+    if s.len() < prefix.len() {
+        return false;
+    }
+    for i in 0..prefix.len() {
+        if s[i] != prefix[i] {
+            return false;
+        }
+    }
+    true
+}

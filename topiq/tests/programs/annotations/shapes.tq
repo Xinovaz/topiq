@@ -1,0 +1,22 @@
+// A unit whose items carry annotations its importer sees: a deprecated
+// function and type, and a function and object exported under symbols of
+// their own, which the importer calls and reads by those symbols.
+#unit classical
+
+[deprecated: "measure with `span` instead"]
+fn width(x: i64) -> i64 { x * 2 }
+
+[export: "shapes_span"]
+fn span(x: i64) -> i64 { x * 3 }
+
+[export: "shapes_count"]
+let COUNT: i64 = 7;
+
+[deprecated]
+struct Old { v: i64 }
+
+[inline: never]
+fn slow(x: i64) -> i64 { x + 1 }
+
+[inline]
+fn quick(x: i64) -> i64 { x + 2 }

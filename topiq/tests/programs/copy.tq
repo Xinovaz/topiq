@@ -1,0 +1,57 @@
+// expect: exit 0
+// stdout: c cd13 cccc 3|d3d2d2d1d1d0 c11d11 c11d11|d10
+#unit classical
+
+fn show(n: i64) {
+    if n >= 10 { show(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+// A number held in a growable array: copied digit by digit.
+struct Big { digits: [i64], tag: i64 }
+
+impl Big {
+    fn $copy(self: *const Big) -> Big {
+        print("c");
+        let d: [i64] = [];
+        for x in &self.digits { d.push(*x); }
+        Big { digits: d, tag: self.tag + 1 }
+    }
+    fn $drop(self: *Big) { print("d"); show(self.tag); }
+}
+
+fn weigh(b: Big) -> i64 { b.digits.len() as i64 }
+
+// Every copy runs `$copy`, and every value, original or copy, is destroyed
+// once.
+fn run() {
+    let a = Big { digits: [1, 2, 3], tag: 0 };
+    let b = a;
+    print(" ");
+    show(weigh(a));
+    print(" ");
+    let pair = [a, b];
+    let q = pair;
+    print(" ");
+    show(q[1].tag);
+    print("|");
+}
+
+// A part bound from a place that stays is copied from where it is, so each
+// match of the place binds a copy of its own.
+fn parts() {
+    let o: Big? = Some(Big { digits: [7], tag: 10 });
+    match o { Some(x) => show(x.tag), None => {} }
+    print(" ");
+    match o { Some(y) => show(y.tag), None => {} }
+    print("|");
+}
+
+fn main() -> i32 {
+    run();
+    print(" ");
+    parts();
+    print("\n");
+    0
+}

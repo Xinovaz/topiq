@@ -1,0 +1,25 @@
+// expect: exit 0
+// stdout: x=1 y=22 z=333 3
+#unit classical
+
+struct Point { x: i64, y: i64, z: i64 }
+enum Shape { Circle(f64), Rect(f64, f64), Dot }
+
+#define SHOW(FIELD, NAME, TY, IDX) print(NAME); print("="); show(p.FIELD); print(" ");
+#define COUNT(V, NAME, TY, IDX) n += 1;
+
+fn show(n: i64) {
+    if n >= 10 { show(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+fn main() -> i32 {
+    let p = Point { x: 1, y: 22, z: 333 };
+    @foreach_field(Point, SHOW)
+    let n = 0;
+    @foreach_variant(Shape, COUNT)
+    show(n);
+    print("\n");
+    0
+}

@@ -1,0 +1,59 @@
+// expect: exit 0
+// stdout: 6 of 3
+// stdout: 12
+#unit classical
+
+struct Pair<A, B> { first: A, second: B }
+
+enum Maybe<T> { Just(T), Nothing }
+
+fn print_u64(n: u64) {
+    if n >= 10 { print_u64(n / 10); }
+    let digit = ["0123456789"[(n % 10) as usize]];
+    print(&digit);
+}
+
+// Its arguments are deduced from what the call passes: `T` from the
+// elements, `N` from the length.
+fn sum<T, N: const usize>(xs: *[T; N], zero: T) -> T where N > 0 {
+    let acc = zero;
+    for i in 0..N { acc = acc + xs[i]; }
+    acc
+}
+
+fn swap<A, B>(p: Pair<A, B>) -> Pair<B, A> {
+    let Pair { first, second } = p;
+    Pair { first: second, second: first }
+}
+
+fn first_or<T>(m: Maybe<T>, fallback: T) -> T {
+    match m {
+        Maybe::Just(x) => x,
+        Maybe::Nothing => fallback,
+    }
+}
+
+fn count<T, N: const usize>(xs: *[T; N]) -> usize { N }
+
+fn main() -> i32 {
+    let xs = [1u64, 2, 3];
+    print_u64(sum(&xs, 0));
+    print(" of ");
+    print_u64(count(&xs) as u64);
+    print("\n");
+
+    let halves = [0.5, 1.5];
+    if sum(&halves, 0.0) != 2.0 { return 1; }
+
+    let p = swap(Pair { first: 7u8, second: true });
+    if !p.first || p.second != 7 { return 2; }
+
+    // One declaration, two instances: `Maybe<i32>` and `Maybe<char>`.
+    let a = first_or(Maybe::Just(5i32), 0);
+    let b = first_or(Maybe::Nothing::<char>, 'z');
+    if a != 5 || b != 'z' { return 3; }
+
+    print_u64(first_or(Maybe::Just(12u64), 0));
+    print("\n");
+    0
+}

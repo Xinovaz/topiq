@@ -1,0 +1,27 @@
+// expect: exit 0
+// stdout: Constant Constant Balanced Balanced
+// The hybrid Deutsch program: the quantum half as written, the classical
+// half running it with each of the four oracles.
+#unit classical
+import deutsch;
+import gates;
+import qpu;
+
+fn show(g: deutsch::Guess) {
+    print(&tcon::emit(&g));
+}
+
+fn main() -> i32 {
+    let dev = qpu::connect("sim://exact").unwrap();
+    show(dev.run(deutsch::deutsch, gates::ORACLE_I).unwrap());
+    print(" ");
+    show(dev.run(deutsch::deutsch, gates::ORACLE_NEGI).unwrap());
+    print(" ");
+    let g = dev.run(deutsch::deutsch, gates::ORACLE_Z).unwrap();
+    print(&tcon::emit(&g));
+    print(" ");
+    // A handle called as a function runs on `sim://exact`.
+    show(deutsch::deutsch(gates::ORACLE_NEGZ));
+    print("\n");
+    0
+}

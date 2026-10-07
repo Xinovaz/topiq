@@ -1,0 +1,35 @@
+// Entangled states the `algo` library makes.
+#unit quantum
+import gates;
+import algo;
+
+// A Bell state made and measured in the Bell basis reads back as made.
+[entry]
+fn bell_round_trip(z_bit: bool, x_bit: bool) -> (bool, bool) {
+    let r: [qubit; 2];
+    algo::bell_basis(z_bit, x_bit, &r[0], &r[1]);
+    algo::bell_measure(r)
+}
+
+// The three qubits of a GHZ state always agree.
+[entry]
+fn ghz_agrees(n: u32) -> bool {
+    let r: [qubit; 3];
+    algo::ghz(&r);
+    let m = measure r;
+    (m[0] == m[1]) && (m[1] == m[2])
+}
+
+// A W state has exactly one qubit |1>.
+[entry]
+fn w_ones(n: u32) -> u32 {
+    let r: [qubit; 4];
+    algo::w_state(&r);
+    let m = measure r;
+    let ones: u32 = 0;
+    for i in 0..4 {
+        let b: u32 = if m[i] { 1 } else { 0 };
+        ones = ones + b;
+    }
+    ones
+}

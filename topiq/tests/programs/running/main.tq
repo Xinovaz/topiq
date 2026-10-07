@@ -1,0 +1,101 @@
+// expect: exit 0
+// stdout: yyyyyyyy same 1111 5 3 10 1 both yyyy same 1 seeded
+// Running circuits on the exact simulator.
+#unit classical
+import circs;
+import qpu;
+
+fn digit(b: bool) {
+    if b { print("1"); } else { print("0"); }
+}
+
+fn main() -> i32 {
+    // Running only reads the device and the options, so both may be `const`.
+    let dev: const qpu::Device = qpu::connect("sim://exact").unwrap();
+    // Each Bell pair's halves agree, whatever is drawn.
+    for i in 0..8 {
+        let (a, b) = dev.run(circs::bell, 0).unwrap();
+        if a == b { print("y"); } else { print("n"); }
+    }
+    print(" ");
+    // A seed makes a run repeat.
+    let o: const qpu::RunOpts = qpu::RunOpts { shots: 1, seed: Some(42) };
+    let first: [bool] = [];
+    let again: [bool] = [];
+    for i in 0..6 {
+        let (a, _) = dev.run_opts(circs::bell, &o, 0).unwrap();
+        first.push(a);
+    }
+    for i in 0..6 {
+        let (a, _) = dev.run_opts(circs::bell, &o, 0).unwrap();
+        again.push(a);
+    }
+    let same = true;
+    for i in 0..6 {
+        if first[i] != again[i] { same = false; }
+    }
+    if same { print("same "); } else { print("differ "); }
+    for i in 0..4 {
+        digit(circs::teleport(0));
+    }
+    print(" ");
+    print(&tcon::emit(&circs::count(5)));
+    print(" ");
+    print(&tcon::emit(&circs::lifted(0)));
+    print(" ");
+    let r = dev.register(2);
+    qpu::prepare(&quon::parse("|10>").unwrap(), r).unwrap();
+    let (x, y) = dev.run(circs::read, r).unwrap();
+    digit(x);
+    digit(y);
+    print(" ");
+    digit(circs::keep(0));
+    print(" ");
+    // Calling a circuit draws afresh each time, so |+> gives both outcomes.
+    let ones = 0;
+    for i in 0..8 {
+        if circs::plus(0) { ones = ones + 1; }
+    }
+    if ones > 0 && ones < 8 { print("both "); } else { print("one "); }
+    // A device seeded from the clock draws differently each run, and its
+    // Bell pairs' halves still agree; the calls' device can be seeded so too.
+    let timed = qpu::connect("sim://exact?seed=clock").unwrap();
+    for i in 0..4 {
+        let (a, b) = timed.run(circs::bell, 0).unwrap();
+        if a == b { print("y"); } else { print("n"); }
+    }
+    print(" ");
+    qpu::calls().reseed(qpu::clock_seed());
+    circs::plus(0);
+    // Reseeding a device repeats its draws.
+    let drawn: [bool] = [];
+    timed.reseed(7);
+    for i in 0..6 {
+        drawn.push(timed.run(circs::plus, 0).unwrap());
+    }
+    timed.reseed(7);
+    let repeated = true;
+    for i in 0..6 {
+        if timed.run(circs::plus, 0).unwrap() != drawn[i] { repeated = false; }
+    }
+    if repeated { print("same "); } else { print("differ "); }
+    let many = qpu::RunOpts { shots: 9, seed: None };
+    digit(dev.run_opts(circs::teleport, &many, 0).unwrap());
+    print(" ");
+    // A seed in the description starts the generator there, as reseeding
+    // does; a seed of zero is the fixed seed every plain connection has.
+    let seeded = qpu::connect("sim://exact?seed=7").unwrap();
+    timed.reseed(7);
+    let agree = true;
+    for i in 0..6 {
+        if seeded.run(circs::plus, 0).unwrap() != timed.run(circs::plus, 0).unwrap() { agree = false; }
+    }
+    let zero = qpu::connect("sim://exact?seed=0").unwrap();
+    let fixed = qpu::connect("sim://exact").unwrap();
+    for i in 0..6 {
+        if zero.run(circs::plus, 0).unwrap() != fixed.run(circs::plus, 0).unwrap() { agree = false; }
+    }
+    if agree { print("seeded"); } else { print("unseeded"); }
+    print("\n");
+    0
+}

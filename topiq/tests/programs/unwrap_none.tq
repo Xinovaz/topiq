@@ -1,0 +1,9 @@
+// expect: abort RA10 at 9
+#unit classical
+
+fn find(xs: *[i64], x: i64) -> usize? {
+    for i in 0..xs.len() { if xs[i] == x { return Some(i); } }
+    None
+}
+
+fn main() -> i32 { let at = find(&[1, 2, 3], 7).expect("7 is there"); at as i32 }

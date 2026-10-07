@@ -1,0 +1,54 @@
+// Map locales of states, and map locales held as values.
+#unit quantum
+import gates;
+
+qmap Load: [qubit; 1] -> [qubit; 2] { 0: prep |01>, 1: prep |10>, }
+
+fn id1(t: *[qubit; 1]) {}
+fn flip1(t: *[qubit; 1]) { x(&t[0]); }
+qmap Flips: [qubit; 1] -> fn(*[qubit; 1]) { 0: id1, 1: flip1, }
+
+// The state the key |1> loads.
+[entry]
+fn loaded(n: u32) -> (bool, bool, bool) {
+    let k: [qubit; 1] = prep |1>;
+    let r = query Load[k];
+    let m = measure r;
+    let km = measure k;
+    (km[0], m[0], m[1])
+}
+
+// A key in superposition loads each state in its own half: the key and
+// the register it loads always agree.
+[entry]
+fn agree(n: u32) -> bool {
+    let k: [qubit; 1] = prep isq2 * |0> + isq2 * |1>;
+    let r = query Load[k];
+    let m = measure r;
+    let km = measure k;
+    (m[0] == km[0]) && (m[1] != km[0])
+}
+
+// The key measured, and the state it chose.
+[entry]
+fn chosen(n: u32) -> (usize, bool, bool) {
+    let k: [qubit; 1] = prep |0>;
+    let (i, r) = measure Load[k];
+    let m = measure r;
+    (i, m[0], m[1])
+}
+
+// A map locale passed as a value, and queried there.
+fn apply_table(m: qmap<[qubit; 1], fn(*[qubit; 1])>, key: *[qubit; 1], t: *[qubit; 1]) {
+    query m[key](t);
+}
+
+[entry]
+fn held(n: u32) -> bool {
+    let k: [qubit; 1] = prep |1>;
+    let t: [qubit; 1] = prep |0>;
+    apply_table(Flips, &k, &t);
+    let km = measure k;
+    let tm = measure t;
+    tm[0]
+}

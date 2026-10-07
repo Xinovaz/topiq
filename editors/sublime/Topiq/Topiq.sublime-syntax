@@ -1,0 +1,549 @@
+%YAML 1.2
+---
+# Topiq source units. Scopes follow the scope naming guide, so any colour
+# scheme colours them.
+#
+# Where the lexer leaves a decision to later phases, this syntax guesses from
+# the text around it:
+# - A `[` opening a line, or following a group on its line, opens an
+#   annotation group when a name and then `:`, `;` or `]` follow. After `(` or
+#   `,` only `cover` and `gauge`, which annotate parameters, do.
+# - `|01>` is a ket when its pieces touch.
+# - `<` opens generic arguments when it touches the name or `::` before it,
+#   as in `Vec<T>` and `phase::<8>`, and a comparison otherwise, as in `a < b`.
+# - A quantum context, where `fin`, `pt`, `i` and `w` have their QUON
+#   meanings, opens after `prep`, on the right of a `cover` or `gauge`
+#   declaration, and in a `cover`, `gauge` or `frame` annotation.
+name: Topiq
+scope: source.topiq
+version: 2
+file_extensions:
+  - tq
+first_line_match: ^\s*#\s*unit\b
+
+variables:
+  ident: '[A-Za-z_][A-Za-z0-9_]*'
+  int_suffix: (?:usize|isize|u8|u16|u32|u64|i8|i16|i32|i64)
+  float_suffix: (?:f32|f64)
+  exponent: (?:[eE][+-]?[0-9]+)
+  primitive: (?:i8|i16|i32|i64|isize|u8|u16|u32|u64|usize|f32|f64|bool|char|qubit|void|any|dyn|closure|circuit)
+  param_annotation: (?:cover|gauge)
+  quantum_annotation: (?:cover|gauge|frame)
+  # a name followed by these begins an annotation; after `;`, anything else
+  # continues the previous one's arguments, as in `[expect: monic; contract = flat(0)]`
+  annotation_head: (?={{ident}}\s*[:;\]])
+
+contexts:
+  prototype:
+    - include: comments
+
+  main:
+    - include: directives
+    - include: annotations
+    - include: code
+
+  code:
+    - include: generics
+    - include: paths
+    - include: declarations
+    - include: keywords
+    - include: literals
+    - include: names
+    - include: operators
+    - include: punctuation
+
+  ##############
+  ## COMMENTS ##
+  ##############
+
+  comments:
+    - match: //
+      scope: punctuation.definition.comment.topiq
+      push: line-comment
+    - match: /\*
+      scope: punctuation.definition.comment.begin.topiq
+      push: block-comment
+
+  line-comment:
+    - meta_include_prototype: false
+    - meta_scope: comment.line.double-slash.topiq
+    # the end of the line is left to a directive, which ends there too
+    - match: $
+      pop: true
+
+  block-comment:
+    - meta_include_prototype: false
+    - meta_scope: comment.block.topiq
+    # block comments do not nest: the first `*/` ends one
+    - match: \*/
+      scope: punctuation.definition.comment.end.topiq
+      pop: true
+
+  ################
+  ## DIRECTIVES ##
+  ################
+
+  directives:
+    - match: ^\s*((#)\s*(?:define|undef))\s+({{ident}})
+      captures:
+        1: keyword.control.directive.topiq
+        2: punctuation.definition.directive.topiq
+        3: entity.name.macro.topiq
+      push: directive-body
+    - match: ^\s*((#)\s*unit)\b
+      captures:
+        1: keyword.control.directive.topiq
+        2: punctuation.definition.directive.topiq
+      push: unit-directive
+    # `#alias dit = bool | qubit`, or with its sides labelled by kind
+    - match: ^\s*((#)\s*alias)\s+({{ident}})
+      captures:
+        1: keyword.control.directive.topiq
+        2: punctuation.definition.directive.topiq
+        3: entity.name.type.topiq
+      push: alias-directive
+    - match: ^\s*((#)\s*pragma)\b(?:\s+({{ident}}))?
+      captures:
+        1: keyword.control.directive.topiq
+        2: punctuation.definition.directive.topiq
+        3: support.function.pragma.topiq
+      push: directive-body
+    - match: ^\s*((#)\s*{{ident}})
+      captures:
+        1: keyword.control.directive.topiq
+        2: punctuation.definition.directive.topiq
+      push: directive-body
+
+  unit-directive:
+    - meta_scope: meta.preprocessor.topiq
+    - match: \b(?:classical|quantum|any|both)\b
+      scope: storage.modifier.unit.topiq
+    - include: directive-body
+
+  alias-directive:
+    - meta_scope: meta.preprocessor.topiq
+    - match: \b(?:classical|quantum)\b
+      scope: storage.modifier.unit.topiq
+    - match: '[=|]'
+      scope: keyword.operator.alias.topiq
+    - match: \b{{primitive}}\b
+      scope: storage.type.topiq
+    - include: directive-body
+
+  directive-body:
+    - meta_scope: meta.preprocessor.topiq
+    # a line ending in a backslash is joined to the next
+    - match: \\$\n?
+      scope: punctuation.separator.continuation.topiq
+    - match: $\n?
+      pop: true
+    - match: '##?'
+      scope: keyword.operator.preprocessor.topiq
+    - include: literals
+    - include: names
+    - include: operators
+    - include: punctuation
+
+  #################
+  ## ANNOTATIONS ##
+  #################
+
+  annotations:
+    - match: (?:^\s*|(?<=\]\s)\s*)(\[)(?=\s*{{ident}}\s*[:;\]])
+      captures:
+        1: punctuation.section.annotation.begin.topiq
+      push: annotation
+    - match: (?<=[(,])\s*(\[)(?=\s*{{param_annotation}}\b)
+      captures:
+        1: punctuation.section.annotation.begin.topiq
+      push: annotation
+
+  annotation:
+    - meta_scope: meta.annotation.topiq
+    - match: \]
+      scope: punctuation.section.annotation.end.topiq
+      pop: true
+    # `cover`, `gauge` and `frame` take a quantum form
+    - match: (?<=[\[;])\s*({{quantum_annotation}})\s*(:)
+      captures:
+        1: variable.annotation.topiq
+        2: punctuation.separator.annotation.topiq
+      push: quon-annotation
+    # each annotation of the group names itself, after `[` or `;`
+    - match: (?<=[\[;])\s*{{annotation_head}}({{ident}})
+      captures:
+        1: variable.annotation.topiq
+    - match: ;
+      scope: punctuation.separator.annotation.topiq
+    - match: (?<!:):(?!:)
+      scope: punctuation.separator.annotation.topiq
+    - match: \[
+      scope: punctuation.section.brackets.begin.topiq
+      push: annotation-brackets
+    - include: code
+
+  quon-annotation:
+    - meta_content_scope: meta.quon.topiq
+    - match: (?=[;\]])
+      pop: true
+    - include: quon
+
+  annotation-brackets:
+    - match: \]
+      scope: punctuation.section.brackets.end.topiq
+      pop: true
+    - match: \[
+      scope: punctuation.section.brackets.begin.topiq
+      push: annotation-brackets
+    - include: code
+
+  ##################
+  ## DECLARATIONS ##
+  ##################
+
+  declarations:
+    # `fn name`, `fn Type.method` or `fn $op`
+    - match: \b(fn)\s+(?:({{ident}})(\.))?(\$?{{ident}})
+      captures:
+        1: keyword.declaration.function.topiq
+        2: support.type.topiq
+        3: punctuation.accessor.dot.topiq
+        4: entity.name.function.topiq
+    - match: \b(struct)\s+({{ident}})
+      captures:
+        1: keyword.declaration.struct.topiq
+        2: entity.name.struct.topiq
+    - match: \b(enum)\s+({{ident}})
+      captures:
+        1: keyword.declaration.enum.topiq
+        2: entity.name.enum.topiq
+    - match: \b(type)\s+({{ident}})
+      captures:
+        1: keyword.declaration.type.topiq
+        2: entity.name.type.topiq
+    # `impl Type` or `impl unit::Type`
+    - match: \b(impl)\s+(?:({{ident}})(::))?({{ident}})
+      captures:
+        1: keyword.declaration.impl.topiq
+        2: variable.namespace.topiq
+        3: punctuation.accessor.double-colon.topiq
+        4: entity.name.impl.topiq
+    - match: \b(base)\s+({{ident}})
+      captures:
+        1: keyword.declaration.topiq
+        2: entity.name.type.topiq
+    - match: \b(locale)\s+({{ident}})
+      captures:
+        1: keyword.declaration.topiq
+        2: entity.name.namespace.topiq
+    # a cover or a gauge is a quantum form, up to its `;`
+    - match: \b(cover|gauge)\s+({{ident}})\s*(=)
+      captures:
+        1: keyword.declaration.topiq
+        2: entity.name.constant.topiq
+        3: keyword.operator.assignment.topiq
+      push: quon-declaration
+    - match: \b(cover|gauge|chain|qmap)\s+({{ident}})
+      captures:
+        1: keyword.declaration.topiq
+        2: entity.name.constant.topiq
+    # `import(quantum) dsp;` asks a `#unit any` unit for a kind
+    - match: \b(import)(?:\s*(\()\s*(classical|quantum)\s*(\)))?\s*({{ident}}(?:::{{ident}})*)
+      captures:
+        1: keyword.control.import.topiq
+        2: punctuation.section.parens.begin.topiq
+        3: storage.modifier.unit.topiq
+        4: punctuation.section.parens.end.topiq
+        5: variable.namespace.topiq
+
+  ##############
+  ## KEYWORDS ##
+  ##############
+
+  keywords:
+    - match: \b(?:if|else|for|in|loop|match|return|while|break|continue)\b
+      scope: keyword.control.topiq
+    # `prep` takes a quantum state, which runs to the end of its expression
+    - match: \bprep\b
+      scope: keyword.other.quantum.topiq
+      push: quon-prep
+    - match: \b(?:measure|forget|lift|query|replay)\b
+      scope: keyword.other.quantum.topiq
+    - match: \blet\b
+      scope: keyword.declaration.variable.topiq
+    - match: \bfn\b
+      scope: keyword.declaration.function.topiq
+    - match: \b(?:struct|enum|type|impl|cover|gauge|base|locale|chain|qmap)\b
+      scope: keyword.declaration.topiq
+    - match: \bimport\b
+      scope: keyword.control.import.topiq
+    - match: \b(?:const|constexpr|static|persist|aux)\b
+      scope: storage.modifier.topiq
+    - match: \b(?:as|of)\b
+      scope: keyword.operator.word.topiq
+    - match: \b(?:where|with)\b
+      scope: keyword.other.topiq
+
+  ##############
+  ## LITERALS ##
+  ##############
+
+  literals:
+    - include: kets
+    - include: numbers
+    - include: strings
+    - match: \b(?:true|false)\b
+      scope: constant.language.boolean.topiq
+
+  kets:
+    - match: (\|)[01]+(>)
+      scope: constant.other.ket.topiq
+      captures:
+        1: punctuation.definition.ket.begin.topiq
+        2: punctuation.definition.ket.end.topiq
+
+  numbers:
+    - match: \b(0[xX])[0-9A-Fa-f_]+({{int_suffix}})?\b
+      scope: constant.numeric.integer.hexadecimal.topiq
+      captures:
+        1: punctuation.definition.numeric.base.topiq
+        2: storage.type.numeric.topiq
+    - match: \b(0[bB])[01_]+({{int_suffix}})?\b
+      scope: constant.numeric.integer.binary.topiq
+      captures:
+        1: punctuation.definition.numeric.base.topiq
+        2: storage.type.numeric.topiq
+    - match: \b(0[oO])[0-7_]+({{int_suffix}})?\b
+      scope: constant.numeric.integer.octal.topiq
+      captures:
+        1: punctuation.definition.numeric.base.topiq
+        2: storage.type.numeric.topiq
+    # a fraction needs a digit after the point, so `1..2` is a range
+    - match: \b[0-9][0-9_]*(?:\.[0-9][0-9_]*{{exponent}}?|{{exponent}})({{float_suffix}})?\b
+      scope: constant.numeric.float.decimal.topiq
+      captures:
+        1: storage.type.numeric.topiq
+    - match: \b[0-9][0-9_]*({{int_suffix}})?\b
+      scope: constant.numeric.integer.decimal.topiq
+      captures:
+        1: storage.type.numeric.topiq
+
+  strings:
+    - match: \br(#?)"
+      scope: punctuation.definition.string.begin.topiq
+      push: raw-string
+    - match: '"'
+      scope: punctuation.definition.string.begin.topiq
+      push: string
+    - match: (')(?:[^'\\]|\\[ntr0\\'"]|\\u\{[0-9A-Fa-f]+\})(')
+      scope: constant.character.topiq
+      captures:
+        1: punctuation.definition.character.begin.topiq
+        2: punctuation.definition.character.end.topiq
+
+  string:
+    - meta_include_prototype: false
+    - meta_scope: string.quoted.double.topiq
+    - match: '"'
+      scope: punctuation.definition.string.end.topiq
+      pop: true
+    - include: escapes
+    # a string ends on its line
+    - match: $\n?
+      scope: invalid.illegal.unterminated-string.topiq
+      pop: true
+
+  raw-string:
+    - meta_include_prototype: false
+    - meta_scope: string.quoted.double.raw.topiq
+    - match: '"\1'
+      scope: punctuation.definition.string.end.topiq
+      pop: true
+
+  escapes:
+    - match: \\(?:[ntr0\\'"]|u\{[0-9A-Fa-f]+\})
+      scope: constant.character.escape.topiq
+    - match: \\.
+      scope: invalid.illegal.escape.topiq
+
+  ###########
+  ## NAMES ##
+  ###########
+
+  names:
+    - match: \bself\b
+      scope: variable.language.self.topiq
+    - match: (@){{ident}}
+      scope: support.macro.topiq
+      captures:
+        1: punctuation.definition.macro.topiq
+    - match: (\$){{ident}}
+      scope: variable.function.operator.topiq
+      captures:
+        1: punctuation.definition.operator.topiq
+    - match: \b{{primitive}}\b
+      scope: storage.type.topiq
+    - match: \bisq2\b
+      scope: constant.language.exact.topiq
+    # `LIMIT`, but not a call such as `H(q)`
+    - match: \b[A-Z][A-Z0-9_]*[A-Z0-9]\b(?!\s*\()
+      scope: constant.other.topiq
+    - match: \b[A-Z][A-Za-z0-9_]*\b
+      scope: support.type.topiq
+    - match: \b{{ident}}(?=\s*::\s*<|\s*\()
+      scope: variable.function.topiq
+    # a name taking generic arguments, such as `vec<i64, 2>`, is a type
+    - match: \b{{ident}}(?=<(?![<=\s]))
+      scope: support.type.topiq
+    - match: \b{{ident}}(?=::)
+      scope: variable.namespace.topiq
+    # after one `.`, not the two of a range
+    - match: (?<=[^.]\.){{ident}}\b
+      scope: variable.other.member.topiq
+
+  ##############
+  ## GENERICS ##
+  ##############
+
+  generics:
+    # touching its name, and closed later on the line: `Vec<T>`, `phase::<8>`,
+    # `fn sum<T>`. `>=` after the close is `>` and then `=`
+    - match: (?<=[A-Za-z0-9_]|::)<(?![<=\s])(?=[^;{}]*>)
+      scope: punctuation.definition.generic.begin.topiq
+      push: generic-arguments
+
+  generic-arguments:
+    - meta_scope: meta.generic.topiq
+    - match: '->'
+      scope: keyword.operator.arrow.topiq
+    - match: '>'
+      scope: punctuation.definition.generic.end.topiq
+      pop: true
+    # not a generic list after all
+    - match: (?=[;{}])
+      pop: true
+    - match: ','
+      scope: punctuation.separator.comma.topiq
+    - include: code
+
+  ###########
+  ## PATHS ##
+  ###########
+
+  paths:
+    # a keyword after `::` is a path segment, as in `phase::<8>::of`
+    - match: (?<=::)(?:[a-z_][A-Za-z0-9_]*)(?=\s*(?:\(|::\s*<))
+      scope: variable.function.topiq
+    - match: (?<=::)(?:[a-z_][A-Za-z0-9_]*)(?=::)
+      scope: variable.namespace.topiq
+    - match: (?<=::)(?:{{primitive}}|[a-z_][A-Za-z0-9_]*)\b
+      scope: variable.other.topiq
+
+  ##########
+  ## QUON ##
+  ##########
+
+  quon-declaration:
+    - meta_content_scope: meta.quon.topiq
+    - match: (?=;)
+      pop: true
+    - include: quon
+
+  quon-prep:
+    - meta_content_scope: meta.quon.topiq
+    # a state ends where the expression holding it does
+    - match: (?=[;,)\]}])
+      pop: true
+    - include: quon
+
+  quon:
+    - match: \(
+      scope: punctuation.section.group.begin.topiq
+      push: quon-group
+    - match: \{
+      scope: punctuation.section.block.begin.topiq
+      push: quon-block
+    - include: quon-items
+
+  quon-group:
+    - match: \)
+      scope: punctuation.section.group.end.topiq
+      pop: true
+    - include: quon
+
+  quon-block:
+    - match: \}
+      scope: punctuation.section.block.end.topiq
+      pop: true
+    - include: quon
+
+  quon-items:
+    - include: kets
+    # cover and gauge formers
+    - match: \b(?:pt|fin|span|code|fid|atlas)\b
+      scope: support.function.quon.topiq
+    # the gauge that allows only stationary states
+    - match: \bnone\b
+      scope: constant.language.quon.topiq
+    # the exact scalars: `i`, `isq2` and the root of unity `w(k, N)`
+    - match: \b(?:i|isq2|w)\b
+      scope: constant.language.exact.topiq
+    - include: code
+
+  ###############
+  ## OPERATORS ##
+  ###############
+
+  operators:
+    # `**` is the tensor product, not a power
+    - match: \*\*
+      scope: keyword.operator.tensor.topiq
+    - match: '->|=>'
+      scope: keyword.operator.arrow.topiq
+    - match: \.\.=?
+      scope: keyword.operator.range.topiq
+    - match: '::'
+      scope: punctuation.accessor.double-colon.topiq
+    # one token each, so `--x` is a decrement
+    - match: '\+\+|--'
+      scope: keyword.operator.increment.topiq
+    - match: '(?:[-+*/%&|^]|<<)='
+      scope: keyword.operator.assignment.augmented.topiq
+    - match: '==|!=|<=|>=|<(?!<)|>'
+      scope: keyword.operator.comparison.topiq
+    - match: '&&|\|\||!'
+      scope: keyword.operator.logical.topiq
+    - match: '='
+      scope: keyword.operator.assignment.topiq
+    - match: '<<|[&|^]'
+      scope: keyword.operator.bitwise.topiq
+    - match: '[-+*/%]'
+      scope: keyword.operator.arithmetic.topiq
+    - match: \?
+      scope: keyword.operator.question.topiq
+
+  #################
+  ## PUNCTUATION ##
+  #################
+
+  punctuation:
+    - match: \{
+      scope: punctuation.section.block.begin.topiq
+    - match: \}
+      scope: punctuation.section.block.end.topiq
+    - match: \(
+      scope: punctuation.section.group.begin.topiq
+    - match: \)
+      scope: punctuation.section.group.end.topiq
+    - match: \[
+      scope: punctuation.section.brackets.begin.topiq
+    - match: \]
+      scope: punctuation.section.brackets.end.topiq
+    - match: ;
+      scope: punctuation.terminator.topiq
+    - match: ','
+      scope: punctuation.separator.comma.topiq
+    - match: ':'
+      scope: punctuation.separator.type.topiq
+    - match: \.
+      scope: punctuation.accessor.dot.topiq

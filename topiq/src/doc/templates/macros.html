@@ -1,0 +1,17 @@
+{#- a unit's name, linked when it has a page -#}
+{% macro unit_link(link, root) -%}
+{% if link.href %}<a class="name" href="{{ root }}{{ link.href }}">{{ link.name }}</a>{% else %}<span class="name missing" title="not found">{{ link.name }}</span>{% endif %}
+{%- endmacro %}
+
+{#- a field, variant, locale member or method -#}
+{% macro member(m, root) -%}
+<section class="member" id="{{ m.id }}">
+  <div class="member-head">
+    <pre class="signature">{{ m.signature|safe }}</pre>
+    <span class="links">{% if m.source %}<a class="src" href="{{ root }}{{ m.source }}">source</a>{% endif %}<a class="anchor" href="#{{ m.id }}" aria-label="Link to {{ m.name }}">§</a></span>
+  </div>
+  {%- if m.doc %}
+  <div class="doc">{{ m.doc|safe }}</div>
+  {%- endif %}
+</section>
+{%- endmacro %}

@@ -1,0 +1,5 @@
+// A unit offering a generic type that other units may add methods to.
+#unit classical
+
+[open]
+struct Box<T> { v: T }

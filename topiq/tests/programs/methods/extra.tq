@@ -1,0 +1,9 @@
+// Adds a method to another unit's `[open]` type.
+#unit classical
+import vec;
+
+fn vec::V2.manhattan(self: *vec::V2) -> i64 {
+    let ax = if self.x < 0 { -self.x } else { self.x };
+    let ay = if self.y < 0 { -self.y } else { self.y };
+    ax + ay
+}

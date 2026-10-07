@@ -1,0 +1,15 @@
+// expect: exit 0
+// One `#unit any` unit imported as both kinds: its routine gives the same
+// answer classically and as a circuit, and each kind runs its own
+// initialiser.
+#unit classical
+import dual;
+import(quantum) dual as qdual;
+
+fn main() -> i32 {
+    let c = dual::sums(0);
+    let q = qdual::sums(0);
+    if c / 10 != q / 10 { return 1; }
+    if c % 10 != 1 || q % 10 != 2 { return 2; }
+    0
+}

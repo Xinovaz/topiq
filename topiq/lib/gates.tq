@@ -1,0 +1,412 @@
+//! The standard gates, and the quantum integers.
+//!
+//! Each operator applies one gate of the standard set to the qubits its
+//! handles name. A quantum unit that imports `gates` names them unqualified:
+//! `h(&q)`, `cx(&c, &t)`, as it does `quint<N>` and its arithmetic.
+//!
+//! What the classical operators stand for on registers and `quint`s is also
+//! written here, under names beginning with `__`, which the compiler calls.
+#unit quantum
+
+fn x(q: *qubit) { __x(q); }
+fn y(q: *qubit) { __y(q); }
+fn z(q: *qubit) { __z(q); }
+fn h(q: *qubit) { __h(q); }
+fn s(q: *qubit) { __s(q); }
+fn sdag(q: *qubit) { __sdag(q); }
+fn t(q: *qubit) { __t(q); }
+fn tdag(q: *qubit) { __tdag(q); }
+
+/// The bit flip of `t`.
+fn cx(c: *qubit, t: *qubit) { __cx(c, t); }
+
+/// The phase flip. It is the same gate either way round.
+fn cz(c: *qubit, t: *qubit) { __cz(c, t); }
+
+/// The bit flip of `t`.
+fn ccx(a: *qubit, b: *qubit, t: *qubit) { __ccx(a, b, t); }
+
+fn swap(a: *qubit, b: *qubit) { __swap(a, b); }
+
+/// diag(1, e^(iθ)) for θ = `k`, a whole number of N-th parts of a turn.
+fn rz<N: const usize>(k: phase<N>, q: *qubit) { __rz(k, q); }
+
+/// e^(iθ) times the identity. Alone it changes nothing observable; controlled,
+/// it is a relative phase.
+fn gphase<N: const usize>(k: phase<N>) { __gphase(k); }
+
+///////////////////
+//
+// Gates made of gates:
+//   Rotations about the other two axes, and gates controlled on several
+//   qubits. Each is exact wherever its angle is: they are built from the
+//   gates above, with no square root but `isq2`'s.
+//
+///////////////////
+
+/// diag(1, e^(iθ)) in the basis |+>, |->: `rz` seen through `h`.
+fn rx<N: const usize>(k: phase<N>, q: *qubit) {
+    h(q);
+    rz(k, q);
+    h(q);
+}
+
+/// diag(1, e^(iθ)) in the basis |+i>, |-i>, which `s` takes |+> and |-> to.
+fn ry<N: const usize>(k: phase<N>, q: *qubit) {
+    sdag(q);
+    h(q);
+    rz(k, q);
+    h(q);
+    s(q);
+}
+
+/// `rz(k)` on `t` where `c` is |1>. Like `cz`, it is the same gate either way
+/// round: the phase lands where both are |1>.
+fn cphase<N: const usize>(k: phase<N>, c: *qubit, t: *qubit) {
+    if *c { rz(k, t); }
+}
+
+/// The bit flip of `t`, controlled on every qubit of `cs`. With no controls
+/// it is `x`.
+fn mcx<N: const usize>(cs: *const [qubit; N], t: *qubit) { __mcx_from(cs, 0, t); }
+
+/// The phase flip of the basis state whose every qubit, `cs`'s and `t`'s,
+/// is |1>.
+fn mcz<N: const usize>(cs: *const [qubit; N], t: *qubit) {
+    h(t);
+    mcx(cs, t);
+    h(t);
+}
+
+/// `mcx` from control `i` on: each control a quantum branch inside the last,
+/// so the flip gains them all and needs no ancilla.
+fn __mcx_from<N: const usize>(cs: *const [qubit; N], i: usize, t: *qubit) {
+    if i == N {
+        x(t);
+    } else {
+        if cs[i] { __mcx_from(cs, i + 1, t); }
+    }
+}
+
+/// `h` on every qubit of `r`: from |0…0>, the uniform superposition.
+fn hadamard_all<N: const usize>(r: *[qubit; N]) {
+    for i in 0..N { h(&r[i]); }
+}
+
+/// `N` fresh qubits in the uniform superposition of every basis state.
+fn uniform<N: const usize>() -> [qubit; N] {
+    let r: [qubit; N];
+    hadamard_all(&r);
+    r
+}
+
+///////////////////
+//
+// Registers:
+//   What `^=`, `^`, `&`, `|` and `!` on registers stand for, qubit by
+//   qubit. The first qubit of a register is its most significant bit.
+//
+///////////////////
+
+fn __xor_reg<N: const usize>(t: *[qubit; N], s: *const [qubit; N]) {
+    for i in 0..N { t[i] ^= s[i]; }
+}
+
+fn __xor_bools<N: const usize>(t: *[qubit; N], b: [bool; N]) {
+    for i in 0..N { t[i] ^= b[i]; }
+}
+
+fn __xor_bits<N: const usize>(t: *[qubit; N], k: u64) {
+    // the bits that do not fit would be lost
+    if N < 64 && k >> N != 0 {
+        panic("an integer placed on qubits does not fit in them");
+    }
+    for i in 0..N { t[i] ^= (k >> (N - 1 - i)) & 1 == 1; }
+}
+
+fn __xor_new<N: const usize>(a: *const [qubit; N], b: *const [qubit; N]) -> [qubit; N] {
+    let r: [qubit; N];
+    for i in 0..N { r[i] ^= a[i] ^ b[i]; }
+    r
+}
+
+fn __and_new<N: const usize>(a: *const [qubit; N], b: *const [qubit; N]) -> [qubit; N] {
+    let r: [qubit; N];
+    for i in 0..N { r[i] ^= a[i] & b[i]; }
+    r
+}
+
+fn __or_new<N: const usize>(a: *const [qubit; N], b: *const [qubit; N]) -> [qubit; N] {
+    let r: [qubit; N];
+    for i in 0..N { r[i] ^= a[i] | b[i]; }
+    r
+}
+
+fn __not_new<N: const usize>(a: *const [qubit; N]) -> [qubit; N] {
+    let r: [qubit; N];
+    for i in 0..N { r[i] ^= !a[i]; }
+    r
+}
+
+///////////////////
+//
+// Quantum integers:
+//   A `quint<N>` is `N` qubits read as an unsigned integer, its first qubit
+//   the most significant bit. Measuring one gives the smallest unsigned
+//   integer type of at least `N` bits.
+//
+// Arithmetic on qubits cannot stop in one branch of a superposition, so it
+// always wraps at 2^N, and is written with `wrapping_` names, as the classical
+// arithmetic that wraps is.
+//
+///////////////////
+
+struct quint<N: const usize> { bits: [qubit; N] }
+
+/// A `quint` holding `k`.
+fn __quint_of<N: const usize>(k: u64) -> quint<N> {
+    let x: quint<N>;
+    x.bits ^= k;
+    x
+}
+
+/// What measuring `x` gives, as the integer type `T`.
+fn __measure_quint<N: const usize, T>(x: quint<N>) -> T {
+    let m = measure x.bits;
+    let v: T = 0;
+    // each bit added once, so that the value read as the circuit runs
+    // grows with the width and not with its powers
+    for i in 0..N {
+        let b: T = if m[i] { 1 } else { 0 };
+        v = v * 2 + b;
+    }
+    v
+}
+
+/// `a + b`, `a - b` and `-a`, wrapping at 2^N. `b` is left as it was.
+fn wrapping_add<N: const usize>(a: quint<N>, b: *quint<N>) -> quint<N> {
+    __add_shifted(&a.bits, &b.bits, 0);
+    a
+}
+fn wrapping_sub<N: const usize>(a: quint<N>, b: *quint<N>) -> quint<N> {
+    __sub_shifted(&a.bits, &b.bits, 0);
+    a
+}
+fn wrapping_neg<N: const usize>(a: quint<N>) -> quint<N> {
+    a.bits ^= !0u64 >> (64 - N);
+    __add_k(&a.bits, 1);
+    a
+}
+
+/// `a + 1` and `a - 1`, wrapping at 2^N.
+fn wrapping_inc<N: const usize>(a: quint<N>) -> quint<N> {
+    __add_k(&a.bits, 1);
+    a
+}
+fn wrapping_dec<N: const usize>(a: quint<N>) -> quint<N> {
+    __sub_k(&a.bits, 1);
+    a
+}
+
+/// `a + k` and `a - k` for an integer `k` known while the circuit is
+/// generated, wrapping at 2^N.
+fn __wrapping_add_k<N: const usize>(a: quint<N>, k: u64) -> quint<N> {
+    __add_k(&a.bits, k);
+    a
+}
+fn __wrapping_sub_k<N: const usize>(a: quint<N>, k: u64) -> quint<N> {
+    __sub_k(&a.bits, k);
+    a
+}
+
+/// `a * k` for an odd `k` known while the circuit is generated, wrapping at
+/// 2^N. An odd number has an inverse modulo 2^N, which is what makes the
+/// product reversible: the product is computed into fresh qubits, `a` is
+/// cleared by subtracting the product times the inverse, and the two change
+/// places.
+fn __wrapping_mul_k<N: const usize>(a: quint<N>, k: u64) -> quint<N> {
+    if k % 2 == 0 {
+        panic("wrapping_mul on a quint takes an odd number: an even one loses the top bit");
+    }
+    let inverse = __inverse_mod(k, N);
+    let p: [qubit; N];
+    for j in 0..N {
+        if (k >> j) & 1 == 1 { __add_shifted(&p, &a.bits, j); }
+    }
+    for j in 0..N {
+        if (inverse >> j) & 1 == 1 { __sub_shifted(&a.bits, &p, j); }
+    }
+    core::swap(&a.bits, &p);
+    a
+}
+
+/// The bits of `a` moved `k` places towards the most significant end, those
+/// pushed off it coming back in at the other.
+fn rotate_left<N: const usize>(a: quint<N>, k: u32) -> quint<N> {
+    let k = (k as usize) % N;
+    if k != 0 {
+        __reverse(&a.bits, 0, k - 1);
+        __reverse(&a.bits, k, N - 1);
+        __reverse(&a.bits, 0, N - 1);
+    }
+    a
+}
+
+/// The bits of `a` moved `k` places towards the least significant end.
+fn rotate_right<N: const usize>(a: quint<N>, k: u32) -> quint<N> {
+    let k = (k as usize) % N;
+    rotate_left(a, (N - k) as u32)
+}
+
+/// Qubit `j` of `r`, counting from the least significant.
+fn __lsb<N: const usize>(r: *[qubit; N], j: usize) -> *qubit { &r[N - 1 - j] }
+
+/// `t += s << shift`, wrapping at 2^N: the ripple-carry adder of Takahashi,
+/// Tani and Kunihiro, which needs no ancilla, over the `n = N - shift` bits
+/// the sum can change. Its carries are kept in `s` as it runs, and `s` is
+/// left as it was.
+fn __add_shifted<N: const usize>(t: *[qubit; N], s: *[qubit; N], shift: usize) {
+    let n = N - shift;
+    for i in 1..n { *__lsb(t, i + shift) ^= __lsb(s, i); }
+    if n >= 3 {
+        for k in 1..n - 1 {
+            let i = n - 1 - k;
+            *__lsb(s, i + 1) ^= __lsb(s, i);
+        }
+    }
+    if n >= 2 {
+        for i in 0..n - 1 { *__lsb(s, i + 1) ^= __lsb(s, i) & __lsb(t, i + shift); }
+        for k in 1..n {
+            let i = n - k;
+            *__lsb(t, i + shift) ^= __lsb(s, i);
+            *__lsb(s, i) ^= __lsb(s, i - 1) & __lsb(t, i - 1 + shift);
+        }
+    }
+    if n >= 3 {
+        for i in 1..n - 1 { *__lsb(s, i + 1) ^= __lsb(s, i); }
+    }
+    for i in 0..n { *__lsb(t, i + shift) ^= __lsb(s, i); }
+}
+
+/// `t -= s << shift`, wrapping at 2^N, as `!(!t + (s << shift))`.
+fn __sub_shifted<N: const usize>(t: *[qubit; N], s: *[qubit; N], shift: usize) {
+    *t ^= !0u64 >> (64 - N);
+    __add_shifted(t, s, shift);
+    *t ^= !0u64 >> (64 - N);
+}
+
+/// `t += k` and `t -= k`: `k` is placed on fresh qubits, added, and taken
+/// off them again, which leaves them in |0>.
+fn __add_k<N: const usize>(t: *[qubit; N], k: u64) {
+    let c: [qubit; N];
+    c ^= k;
+    __add_shifted(t, &c, 0);
+    c ^= k;
+}
+fn __sub_k<N: const usize>(t: *[qubit; N], k: u64) {
+    let c: [qubit; N];
+    c ^= k;
+    __sub_shifted(t, &c, 0);
+    c ^= k;
+}
+
+/// Reverses the qubits of `r` from `lo` to `hi`.
+fn __reverse<N: const usize>(r: *[qubit; N], lo: usize, hi: usize) {
+    for k in 0..(hi - lo + 1) / 2 { swap(&r[lo + k], &r[hi - k]); }
+}
+
+/// The `x` with `k * x` one modulo 2^n, for an odd `k`: each bit of `x`, from
+/// the least significant, is chosen to clear that bit of the product.
+fn __inverse_mod(k: u64, n: usize) -> u64 {
+    let x: u64 = 1;
+    for b in 1..n {
+        if (__mul_mod(k, x, b + 1) >> b) & 1 == 1 { x |= 1u64 << b; }
+    }
+    x
+}
+
+/// `a * b` modulo 2^n, for `n` up to 64, without overflowing a `u64`.
+fn __mul_mod(a: u64, b: u64, n: usize) -> u64 {
+    let mask = !0u64 >> (64 - n);
+    let acc: u64 = 0;
+    for i in 0..n {
+        if (b >> i) & 1 == 1 {
+            let term = (a & (mask >> i)) << i;
+            // the sum modulo 2^n, both being below it
+            let room = mask - acc;
+            acc = if term > room { term - room - 1 } else { acc + term };
+        }
+    }
+    acc
+}
+
+fn __qxor<N: const usize>(a: *const quint<N>, b: *const quint<N>) -> quint<N> { quint { bits: __xor_new(&a.bits, &b.bits) } }
+fn __qand<N: const usize>(a: *const quint<N>, b: *const quint<N>) -> quint<N> { quint { bits: __and_new(&a.bits, &b.bits) } }
+fn __qor<N: const usize>(a: *const quint<N>, b: *const quint<N>) -> quint<N> { quint { bits: __or_new(&a.bits, &b.bits) } }
+fn __qnot<N: const usize>(a: *const quint<N>) -> quint<N> { quint { bits: __not_new(&a.bits) } }
+
+///////////////////
+//
+// Standard geometry:
+//   The covers, gauges and base types a judgement is most often stated
+//   against, which another unit names as `gates::T01`.
+//
+// Whether a gate imparts a relative phase depends on the convention it is
+// read in. `x` is rigid over the computational pair gauged at |+> and
+// cyclic, (0, π), over the Hadamard pair gauged at |0>; `z` is the other way
+// round. Naming the pair a contract is stated over is what makes the
+// contract mean anything.
+//
+///////////////////
+
+/// The computational pair |0>, |1>, each with the phase that gives it a
+/// positive overlap with |+>: the representatives are |0> and |1>
+/// themselves.
+cover COMPUTATIONAL = fin{ |0>, |1> };
+gauge G_PLUS = fid((|0> + |1>) * isq2);
+base T01 = [qubit; 1], COMPUTATIONAL, G_PLUS;
+
+/// The Hadamard pair |+>, |->.
+cover HADAMARD = fin{ (|0> + |1>) * isq2, (|0> - |1>) * isq2 };
+gauge G_ZERO = fid(|0>);
+base TPM = [qubit; 1], HADAMARD, G_ZERO;
+
+/// The two branches of the Bell state Φ+.
+cover BELL_PAIR = fin{ |00>, |11> };
+gauge G_BELL = fid((|00> + |11>) * isq2);
+base BELL = [qubit; 2], BELL_PAIR, G_BELL;
+
+// The four one-bit oracles of Deutsch's problem, each acting on a query qubit
+// `x` and an answer qubit `y` as |x>|y> to |x>|y xor f(x)>: f is 0, 1, the
+// identity and its negation. With `y` in |->, each acts on `x` as the phase
+// oracle I, -I, Z and -Z, whose schedules over |0> and |1> are (0, 0),
+// (π, π), (0, π) and (π, 0). The constant oracles are flat and the balanced
+// ones are not, which is Deutsch's promise decided by the judgement.
+//
+// Whether an oracle is flat depends on the gauge, so the contracts are
+// stated against a cover and gauge declared here, which a unit using an
+// oracle can name. The oracles are entry operators, so that a classical
+// program can hold one as a circuit handle and supply it to a circuit it
+// runs.
+cover ORACLE_COVER = fin{ |0> ** (|0> - |1>) * isq2, |1> ** (|0> - |1>) * isq2 };
+gauge ORACLE_GAUGE = fid((|0> + |1>) ** (|0> - |1>) / 2);
+
+[cover: ORACLE_COVER] [gauge: ORACLE_GAUGE]
+[entry]
+[expect: monic; contract = rigid]
+fn ORACLE_I(x: *qubit, y: *qubit) { }
+
+[cover: ORACLE_COVER] [gauge: ORACLE_GAUGE]
+[entry]
+[expect: monic; contract = flat(4)]
+fn ORACLE_NEGI(x: *qubit, y: *qubit) { *y ^= true; }
+
+[cover: ORACLE_COVER] [gauge: ORACLE_GAUGE]
+[entry]
+[expect: monic; contract = cyc(0, 4)]
+fn ORACLE_Z(x: *qubit, y: *qubit) { *y ^= x; }
+
+[cover: ORACLE_COVER] [gauge: ORACLE_GAUGE]
+[entry]
+[expect: monic; contract = cyc(4, 0)]
+fn ORACLE_NEGZ(x: *qubit, y: *qubit) { *y ^= true; *y ^= x; }

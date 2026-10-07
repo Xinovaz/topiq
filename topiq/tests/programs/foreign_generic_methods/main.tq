@@ -1,0 +1,22 @@
+// expect: exit 0
+// stdout: 21 true 42.
+// Methods added by one unit to another's generic `[open]` type: generic over
+// its parameters, and made with each instance used.
+#unit classical
+import boxes;
+
+impl boxes::Box<T> {
+    fn get(self: *boxes::Box<T>) -> *T { &self.v }
+}
+
+fn main() -> i32 {
+    let b = boxes::Box { v: 21 };
+    let c = boxes::Box { v: true };
+    print(&tcon::emit(b.get()));
+    print(" ");
+    print(&tcon::emit(c.get()));
+    print(" ");
+    print(&tcon::emit(&(*b.get() * 2)));
+    print(".\n");
+    0
+}

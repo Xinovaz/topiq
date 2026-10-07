@@ -1,0 +1,659 @@
+//! The `circuit` library: circuits made from circuits while a program runs.
+//!
+//! `then(f, g)` runs `f` and then `g` on the same qubits; `adjoint(f)` undoes
+//! `f`, a matrix by its conjugate transpose and a loop by the loop over the
+//! same range, its rounds reversed; `controlled(f)` runs `f` where a qubit it
+//! takes first is |1>; and
+//! `repeat(f, n)` runs `f` `n` times. Each carries a judgement as sound as
+//! one derived when a program is translated: `then` composes the two
+//! certificates by the cocycle law, the second's schedule read at the points
+//! the first carries each point to; `adjoint` inverts; and `controlled` is
+//! judged sector by sector, the identity where the control is |0> and `f`'s
+//! certificate where it is |1>. A class is read off the certificate, never
+//! composed. `judgment(f)` gives a circuit's judgement.
+//!
+//! A circuit made here lives as long as the program runs.
+#unit classical
+import qpu;
+import judge;
+import quon;
+import tcon;
+
+/// The documents of the circuits made here, and the judgements `judgment`
+/// gave, each where it stays.
+let MADE: [string] = [];
+let JUDGED: [[judge::Judgment]] = [];
+
+/// `f`, then `g`, on the same qubits: what `g` returns is what the circuit
+/// returns. `Err(EndpointMismatch)` when the base type `f`'s judgement
+/// carries its qubits to is not the one `g`'s is from.
+fn then<S>(f: circuit<S>, g: circuit<S>) -> Result<circuit<S>, qpu::Error> {
+    let doc = __then(__circuit_doc(f), __circuit_doc(g))?;
+    Ok(__circuit_of(doc))
+}
+
+/// The circuit that undoes `f`. `Err(NotUnitary)` when `f` measures, forgets
+/// or lifts, or chooses what it does by what it measures: an instrument has
+/// no adjoint.
+fn adjoint<S>(f: circuit<S>) -> Result<circuit<S>, qpu::Error> {
+    let doc = __adjoint(__circuit_doc(f))?;
+    Ok(__circuit_of(doc))
+}
+
+/// `f` run `n` times on the same qubits.
+fn repeat<S>(f: circuit<S>, n: u32) -> circuit<S> {
+    match __repeat(__circuit_doc(f), n) {
+        Ok(doc) => __circuit_of(doc),
+        Err(_) => panic("a circuit that cannot be repeated"),
+    }
+}
+
+/// The judgement of the circuit `f` refers to: the one its document carries,
+/// or one whose every field is `Unknown` when it carries none.
+fn judgment<S>(f: *const circuit<S>) -> *const judge::Judgment {
+    __judgment(__circuit_doc(*f))
+}
+
+///////////////////////////////////////////////
+// WHAT THE FUNCTIONS ABOVE DO, ON DOCUMENTS //
+///////////////////////////////////////////////
+
+fn __then(fd: *const [char], gd: *const [char]) -> Result<*[char], qpu::Error> {
+    let f = qpu::__circuit_of_doc(fd)?;
+    let g = qpu::__circuit_of_doc(gd)?;
+    if f.target.len() > 0 && g.source.len() > 0 && f.target != g.source {
+        return Err(qpu::Error::EndpointMismatch);
+    }
+    Ok(keep(compose(&f, &g)?))
+}
+
+fn __adjoint(fd: *const [char]) -> Result<*[char], qpu::Error> {
+    let f = qpu::__circuit_of_doc(fd)?;
+    for op in &f.body {
+        match op {
+            qpu::Op::If { cond, then, els } => { return Err(qpu::Error::NotUnitary); }
+            _ => {}
+        }
+    }
+    if !qpu::__is_monic(&f.body) {
+        return Err(qpu::Error::NotUnitary);
+    }
+    let c = clone(&f);
+    c.body = qpu::__invert(&f.body, f.conductor)?;
+    c.inputs = clone(&f.outputs);
+    c.outputs = clone(&f.inputs);
+    c.result = None;
+    c.name = "adjoint(" + f.name + ")";
+    c.source = clone(&f.target);
+    c.target = clone(&f.source);
+    c.judgment = match &f.judgment {
+        Some(j) => Some(inverted(j)),
+        None => None,
+    };
+    Ok(keep(c))
+}
+
+fn __repeat(fd: *const [char], n: u32) -> Result<*[char], qpu::Error> {
+    let f = qpu::__circuit_of_doc(fd)?;
+    if n == 0 {
+        let c = clone(&f);
+        let body: [qpu::Op] = [];
+        for w in &f.inputs {
+            body.push(qpu::Op::Alloc { wire: *w });
+        }
+        c.body = body;
+        c.outputs = clone(&f.inputs);
+        c.result = None;
+        c.name = "repeat(" + f.name + ", 0)";
+        c.judgment = match &f.judgment {
+            Some(j) => Some(identity(j)),
+            None => None,
+        };
+        return Ok(keep(c));
+    }
+    let c = clone(&f);
+    for _ in 1..n {
+        c = compose(&c, &f)?;
+    }
+    Ok(keep(c))
+}
+
+fn __judgment(fd: *const [char]) -> *const judge::Judgment {
+    let j = match qpu::__circuit_of_doc(fd) {
+        Ok(c) => match c.judgment {
+            Some(j) => j,
+            None => unknown(),
+        },
+        Err(_) => unknown(),
+    };
+    JUDGED.push([j]);
+    let n = JUDGED.len() - 1;
+    let p: *const judge::Judgment = &JUDGED[n][0];
+    p
+}
+
+/// What `controlled(f)` is, whose type the compiler works out: `f` with a
+/// qubit it takes first, `circuit<fn(*qubit, …) -> R>` for `f`'s
+/// `circuit<fn(…) -> R>`, which every operation is controlled on. An
+/// instrument cannot be controlled: what it measures would depend on the
+/// control's superposition.
+fn __controlled_of<S>(f: circuit<S>) -> *[char] {
+    __controlled(__circuit_doc(f))
+}
+
+fn __controlled(fd: *const [char]) -> *[char] {
+    let f = match qpu::__circuit_of_doc(fd) {
+        Ok(f) => f,
+        Err(_) => panic("a circuit's document that does not read"),
+    };
+    if !qpu::__is_monic(&f.body) {
+        panic("an instrument cannot be controlled: what it measures would depend on a superposition");
+    }
+    let ctl = f.wires;
+    let body: [qpu::Op] = [qpu::Op::Alloc { wire: ctl }];
+    for op in &f.body {
+        body.push(under(op, ctl));
+    }
+    let c = clone(&f);
+    c.body = body;
+    c.wires = f.wires + 1;
+    let inputs: [u32] = [ctl];
+    for w in &f.inputs {
+        inputs.push(*w);
+    }
+    let outputs: [u32] = [ctl];
+    for w in &f.outputs {
+        outputs.push(*w);
+    }
+    let registers: [u32] = [1];
+    for r in &f.registers {
+        registers.push(*r);
+    }
+    c.inputs = inputs;
+    c.outputs = outputs;
+    c.registers = registers;
+    c.name = "controlled(" + f.name + ")";
+    c.sig = with_control(&f.sig);
+    c.source = "";
+    c.target = "";
+    c.judgment = match &f.judgment {
+        Some(j) => Some(sectored(j)),
+        None => None,
+    };
+    keep(c)
+}
+
+//////////////
+// CIRCUITS //
+//////////////
+
+/// Keeps a circuit's document as long as the program runs.
+static fn keep(c: qpu::Circuit) -> *[char] {
+    MADE.push(tcon::emit(&c));
+    let n = MADE.len() - 1;
+    &MADE[n]
+}
+
+/// The signature `fn(…) -> R` with a `*qubit` first.
+static fn with_control(sig: *const [char]) -> string {
+    let out: string = "";
+    let done = false;
+    for i in 0..sig.len() {
+        out.chars.push(sig[i]);
+        if !done && sig[i] == '(' {
+            done = true;
+            out += "*qubit";
+            if i + 1 < sig.len() && sig[i + 1] != ')' {
+                out += ", ";
+            }
+        }
+    }
+    out
+}
+
+static fn gcd(a: u32, b: u32) -> u32 {
+    while b != 0 {
+        let t = a % b;
+        a = b;
+        b = t;
+    }
+    a
+}
+
+/// `f` then `g`: `g`'s qubits for its parameters are the ones `f` gives
+/// back, its other wires, bits and variables numbered after `f`'s.
+static fn compose(f: *const qpu::Circuit, g: *const qpu::Circuit) -> Result<qpu::Circuit, qpu::Error> {
+    let n = f.conductor / gcd(f.conductor, g.conductor) * g.conductor;
+    let wires: [u32] = [];
+    let next = f.wires;
+    for _ in 0..g.wires {
+        wires.push(next++);
+    }
+    let from = if f.outputs.len() == g.inputs.len() { &f.outputs } else { &f.inputs };
+    if from.len() != g.inputs.len() {
+        return Err(qpu::Error::BadArgument("the two circuits do not take the same qubits"));
+    }
+    for i in 0..g.inputs.len() {
+        wires[g.inputs[i] as usize] = from[i];
+    }
+    let fs = Shift { wires: [], bits: 0, vars: 0, regs: 0, scale: n / f.conductor, identity: true };
+    let gs = Shift { wires: wires, bits: f.bits, vars: f.vars, regs: f.grown, scale: n / g.conductor, identity: false };
+    let body: [qpu::Op] = [];
+    for op in &f.body {
+        body.push(shifted(op, &fs)?);
+    }
+    for op in &g.body {
+        body.push(shifted(op, &gs)?);
+    }
+    let c = clone(f);
+    c.name = f.name + " then " + g.name;
+    c.conductor = n;
+    c.wires = next;
+    c.bits = f.bits + g.bits;
+    c.vars = f.vars + g.vars;
+    c.grown = f.grown + g.grown;
+    c.body = body;
+    let outputs: [u32] = [];
+    for w in &g.outputs {
+        outputs.push(gs.wires[(*w) as usize]);
+    }
+    c.outputs = outputs;
+    for nd in &g.nodes {
+        c.nodes.push(qpu::Node { node: nd.node, wire: gs.wires[nd.wire as usize] });
+    }
+    c.result = match &g.result {
+        Some(e) => Some(shifted_expr(e, &gs)),
+        None => None,
+    };
+    c.dynamic = f.dynamic || g.dynamic;
+    c.target = clone(&g.target);
+    c.judgment = match &f.judgment {
+        Some(a) => match &g.judgment {
+            Some(b) => Some(composed(a, b, n)),
+            None => None,
+        },
+        None => None,
+    };
+    Ok(c)
+}
+
+/// How one circuit's wires, bits, variables, registers and angles are
+/// renumbered in another: `identity` when its wires keep their numbers.
+struct Shift { wires: [u32], bits: u32, vars: u32, regs: u32, scale: u32, identity: bool }
+
+static fn moved(w: u32, s: *const Shift) -> u32 {
+    if s.identity { w } else { s.wires[w as usize] }
+}
+
+static fn wires_of(ws: *const [u32], s: *const Shift) -> [u32] {
+    let out: [u32] = [];
+    for w in ws {
+        out.push(moved(*w, s));
+    }
+    out
+}
+
+static fn controls_of(cs: *const [qpu::Control], s: *const Shift) -> [qpu::Control] {
+    let out: [qpu::Control] = [];
+    for c in cs {
+        out.push(qpu::Control { wire: moved(c.wire, s), on: c.on });
+    }
+    out
+}
+
+static fn shifted_angle(a: *const qpu::Angle, s: *const Shift) -> qpu::Angle {
+    match a {
+        qpu::Angle::Fixed(m) => qpu::Angle::Fixed(m * s.scale),
+        qpu::Angle::Runtime(e) => {
+            // an angle computed as the circuit runs counts its conductor's
+            // parts of a turn, so it is scaled as it is computed
+            let k = qpu::Expr::Value(qpu::Const::Int(tcon::emit(&s.scale), "i64"));
+            qpu::Angle::Runtime(qpu::Expr::Binary("Mul", [shifted_expr(e, s), k]))
+        }
+    }
+}
+
+static fn shifted(op: *const qpu::Op, s: *const Shift) -> Result<qpu::Op, qpu::Error> {
+    Ok(match op {
+        qpu::Op::Gate { gate, targets, controls } => {
+            let g = match gate {
+                qpu::Gate::Phase(a) => qpu::Gate::Phase(shifted_angle(a, s)),
+                qpu::Gate::GPhase(a) => qpu::Gate::GPhase(shifted_angle(a, s)),
+                other => clone(other),
+            };
+            qpu::Op::Gate { gate: g, targets: wires_of(targets, s), controls: controls_of(controls, s) }
+        }
+        qpu::Op::Unitary { size, entries, targets, controls } => {
+            if s.scale != 1 {
+                return Err(qpu::Error::Unsupported);
+            }
+            qpu::Op::Unitary { size: size, entries: clone(entries), targets: wires_of(targets, s), controls: controls_of(controls, s) }
+        }
+        qpu::Op::Measure { wire, bit } => qpu::Op::Measure { wire: moved(wire, s), bit: bit + s.bits },
+        qpu::Op::Alloc { wire } => qpu::Op::Alloc { wire: moved(wire, s) },
+        qpu::Op::Release { wire } => qpu::Op::Release { wire: moved(wire, s) },
+        qpu::Op::Forget { wire } => qpu::Op::Forget { wire: moved(wire, s) },
+        qpu::Op::If { cond, then, els } => {
+            qpu::Op::If { cond: shifted_expr(cond, s), then: shifted_all(then, s)?, els: shifted_all(els, s)? }
+        }
+        qpu::Op::For { var, start, end, body } => qpu::Op::For {
+            var: var + s.vars,
+            start: shifted_expr(start, s),
+            end: shifted_expr(end, s),
+            body: shifted_all(body, s)?,
+        },
+        qpu::Op::Let { var, value } => qpu::Op::Let { var: var + s.vars, value: shifted_expr(value, s) },
+        qpu::Op::Lift { var, value } => qpu::Op::Lift { var: var + s.vars, value: shifted_expr(value, s) },
+        qpu::Op::Call { slot, args, controls, adjoint } => {
+            let a: [[u32]] = [];
+            for x in args {
+                a.push(wires_of(x, s));
+            }
+            qpu::Op::Call { slot: slot, args: a, controls: controls_of(controls, s), adjoint: adjoint }
+        }
+        qpu::Op::Grow { reg, wire } => qpu::Op::Grow { reg: reg + s.regs, wire: moved(wire, s) },
+        qpu::Op::Element { wire, reg, index } => {
+            qpu::Op::Element { wire: moved(wire, s), reg: reg + s.regs, index: shifted_expr(index, s) }
+        }
+        qpu::Op::MeasureAll { reg, var } => qpu::Op::MeasureAll { reg: reg + s.regs, var: var + s.vars },
+    })
+}
+
+static fn shifted_all(ops: *const [qpu::Op], s: *const Shift) -> Result<[qpu::Op], qpu::Error> {
+    let out: [qpu::Op] = [];
+    for op in ops {
+        out.push(shifted(op, s)?);
+    }
+    Ok(out)
+}
+
+static fn shifted_exprs(xs: *const [qpu::Expr], s: *const Shift) -> [qpu::Expr] {
+    let out: [qpu::Expr] = [];
+    for x in xs {
+        out.push(shifted_expr(x, s));
+    }
+    out
+}
+
+static fn shifted_expr(e: *const qpu::Expr, s: *const Shift) -> qpu::Expr {
+    match e {
+        qpu::Expr::Bit(b) => qpu::Expr::Bit(b + s.bits),
+        qpu::Expr::Var(v) => qpu::Expr::Var(v + s.vars),
+        qpu::Expr::Unary(op, xs) => qpu::Expr::Unary(clone(op), shifted_exprs(xs, s)),
+        qpu::Expr::Binary(op, xs) => qpu::Expr::Binary(clone(op), shifted_exprs(xs, s)),
+        qpu::Expr::Logical(op, xs) => qpu::Expr::Logical(clone(op), shifted_exprs(xs, s)),
+        qpu::Expr::Cast(xs, t) => qpu::Expr::Cast(shifted_exprs(xs, s), clone(t)),
+        qpu::Expr::Index(xs) => qpu::Expr::Index(shifted_exprs(xs, s)),
+        qpu::Expr::Field(xs, k) => qpu::Expr::Field(shifted_exprs(xs, s), k),
+        qpu::Expr::Array(xs) => qpu::Expr::Array(shifted_exprs(xs, s)),
+        qpu::Expr::Struct(xs) => qpu::Expr::Struct(shifted_exprs(xs, s)),
+        qpu::Expr::Variant(k, xs) => qpu::Expr::Variant(k, shifted_exprs(xs, s)),
+        qpu::Expr::Is(xs, k) => qpu::Expr::Is(shifted_exprs(xs, s), k),
+        qpu::Expr::Payload(xs, k) => qpu::Expr::Payload(shifted_exprs(xs, s), k),
+        qpu::Expr::Select(xs) => qpu::Expr::Select(shifted_exprs(xs, s)),
+        qpu::Expr::RegLen(r) => qpu::Expr::RegLen(r + s.regs),
+        qpu::Expr::Len(xs) => qpu::Expr::Len(shifted_exprs(xs, s)),
+        qpu::Expr::Append(xs) => qpu::Expr::Append(shifted_exprs(xs, s)),
+        other => clone(other),
+    }
+}
+
+/// The controls `cs` and the wire `ctl`.
+static fn and_ctl(cs: *const [qpu::Control], ctl: u32) -> [qpu::Control] {
+    let out: [qpu::Control] = clone(cs);
+    out.push(qpu::Control { wire: ctl, on: true });
+    out
+}
+
+/// `op` controlled on the wire `ctl` as well.
+static fn under(op: *const qpu::Op, ctl: u32) -> qpu::Op {
+    match op {
+        qpu::Op::Gate { gate, targets, controls } => qpu::Op::Gate { gate: clone(gate), targets: clone(targets), controls: and_ctl(controls, ctl) },
+        qpu::Op::Unitary { size, entries, targets, controls } => {
+            qpu::Op::Unitary { size: size, entries: clone(entries), targets: clone(targets), controls: and_ctl(controls, ctl) }
+        }
+        qpu::Op::Call { slot, args, controls, adjoint } => {
+            qpu::Op::Call { slot: slot, args: clone(args), controls: and_ctl(controls, ctl), adjoint: adjoint }
+        }
+        qpu::Op::For { var, start, end, body } => {
+            let b: [qpu::Op] = [];
+            for x in body {
+                b.push(under(x, ctl));
+            }
+            qpu::Op::For { var: var, start: clone(start), end: clone(end), body: b }
+        }
+        other => clone(other),
+    }
+}
+
+////////////////
+// JUDGEMENTS //
+////////////////
+
+static fn unknown() -> judge::Judgment {
+    judge::Judgment {
+        monic: judge::Tri::Unknown,
+        unitary: judge::Tri::Unknown,
+        contract: judge::ContractClass::Unknown,
+        cert: None,
+        kernel: None,
+        fragment: judge::FragmentInfo { conductor: 48, inside: false, stabilizer: false },
+        dynamic: false,
+    }
+}
+
+/// Whether both hold: no if either does not, yes if both do, and otherwise
+/// not decided.
+static fn both(a: *const judge::Tri, b: *const judge::Tri) -> judge::Tri {
+    if *a == judge::Tri::No || *b == judge::Tri::No {
+        judge::Tri::No
+    } else if *a == judge::Tri::Yes && *b == judge::Tri::Yes {
+        judge::Tri::Yes
+    } else {
+        judge::Tri::Unknown
+    }
+}
+
+/// The strongest class a certificate satisfies.
+static fn strongest(c: *const judge::Certificate) -> judge::ContractClass {
+    if c.map.len() == 0 {
+        if c.schedule.len() == 1 {
+            return judge::ContractClass::Stat(c.schedule[0]);
+        }
+        return judge::ContractClass::Free;
+    }
+    let first = c.schedule[0];
+    let constant = true;
+    let stationary = true;
+    for i in 0..c.schedule.len() {
+        if c.schedule[i] != first {
+            constant = false;
+        }
+        if c.map[i] != i {
+            stationary = false;
+        }
+    }
+    if constant && stationary {
+        return judge::ContractClass::Stat(first);
+    }
+    if constant {
+        if first.index() == 0 {
+            return judge::ContractClass::Rigid;
+        }
+        return judge::ContractClass::Flat(first);
+    }
+    judge::ContractClass::Cyc(clone(&c.schedule))
+}
+
+/// `a`'s operator then `b`'s, judged at conductor `n`.
+static fn composed(a: *const judge::Judgment, b: *const judge::Judgment, n: u32) -> judge::Judgment {
+    let kernel = match &a.kernel {
+        Some(x) => match &b.kernel {
+            Some(y) => Some(judge::Kernel {
+                measured: x.measured + y.measured,
+                forgotten: x.forgotten + y.forgotten,
+                outcomes: clone(&y.outcomes),
+            }),
+            None => Some(clone(x)),
+        },
+        None => clone(&b.kernel),
+    };
+    let cert = match &a.cert {
+        Some(f) => match &b.cert {
+            Some(g) => cocycle(f, g),
+            None => None,
+        },
+        None => None,
+    };
+    let contract = match &kernel {
+        Some(_) => judge::ContractClass::Free,
+        None => match &cert {
+            Some(c) => strongest(c),
+            None => judge::ContractClass::Unknown,
+        },
+    };
+    judge::Judgment {
+        monic: both(&a.monic, &b.monic),
+        unitary: both(&a.unitary, &b.unitary),
+        contract: contract,
+        cert: cert,
+        kernel: kernel,
+        fragment: judge::FragmentInfo {
+            conductor: n,
+            inside: a.fragment.inside && b.fragment.inside,
+            stabilizer: a.fragment.stabilizer && b.fragment.stabilizer,
+        },
+        dynamic: a.dynamic || b.dynamic,
+    }
+}
+
+/// The certificate of f then g by the cocycle law: each point goes where g
+/// takes the point f takes it to, with f's phase and g's there.
+static fn cocycle(f: *const judge::Certificate, g: *const judge::Certificate) -> judge::Certificate? {
+    if f.map.len() == 0 && g.map.len() == 0 {
+        if f.schedule.len() == 1 && g.schedule.len() == 1 {
+            return Some(judge::Certificate { map: [], schedule: [f.schedule[0] + g.schedule[0]], sectors: [], points: [] });
+        }
+        return None;
+    }
+    if f.map.len() == 0 || g.map.len() == 0 {
+        return None;
+    }
+    let map: [usize] = [];
+    let schedule: [phase<48>] = [];
+    for i in 0..f.map.len() {
+        let t = f.map[i];
+        if t >= g.map.len() {
+            return None;
+        }
+        map.push(g.map[t]);
+        schedule.push(f.schedule[i] + g.schedule[t]);
+    }
+    // the composite starts where f does
+    Some(judge::Certificate { map: map, schedule: schedule, sectors: [], points: clone(&f.points) })
+}
+
+/// The judgement of the adjoint: each point's image carried back, with the
+/// opposite phase.
+static fn inverted(j: *const judge::Judgment) -> judge::Judgment {
+    let out = clone(j);
+    out.cert = match &j.cert {
+        Some(c) => {
+            if c.map.len() == 0 {
+                let s: [phase<48>] = [];
+                for p in &c.schedule {
+                    s.push(-*p);
+                }
+                Some(judge::Certificate { map: [], schedule: s, sectors: [], points: [] })
+            } else {
+                let n = c.map.len();
+                let map: [usize] = [];
+                let schedule: [phase<48>] = [];
+                for _ in 0..n {
+                    map.push(n);
+                    schedule.push(phase::<48>::of(0));
+                }
+                let whole = true;
+                for i in 0..n {
+                    let t = c.map[i];
+                    if t >= n || map[t] != n {
+                        whole = false;
+                    } else {
+                        map[t] = i;
+                        schedule[t] = -c.schedule[i];
+                    }
+                }
+                // an operator judged from a cover to itself: the adjoint starts
+                // on the same points
+                if whole {
+                    Some(judge::Certificate { map: map, schedule: schedule, sectors: [], points: clone(&c.points) })
+                } else {
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+    out.contract = match &out.cert {
+        Some(c) => strongest(c),
+        None => judge::ContractClass::Unknown,
+    };
+    out
+}
+
+/// The judgement of an operator that does nothing, over the points of `j`'s
+/// certificate.
+static fn identity(j: *const judge::Judgment) -> judge::Judgment {
+    let out = clone(j);
+    out.monic = judge::Tri::Yes;
+    out.unitary = judge::Tri::Yes;
+    out.kernel = None;
+    out.dynamic = false;
+    out.cert = match &j.cert {
+        Some(c) => {
+            let map: [usize] = [];
+            let schedule: [phase<48>] = [];
+            let n = if c.map.len() == 0 { 1 } else { c.map.len() };
+            for i in 0..n {
+                if c.map.len() > 0 {
+                    map.push(i);
+                }
+                schedule.push(phase::<48>::of(0));
+            }
+            Some(judge::Certificate { map: map, schedule: schedule, sectors: [], points: clone(&c.points) })
+        }
+        None => None,
+    };
+    out.contract = match &out.cert {
+        Some(c) => strongest(c),
+        None => judge::ContractClass::Unknown,
+    };
+    out
+}
+
+/// The judgement of `controlled(f)`: sector by sector, the identity where
+/// the control is |0> and `f`'s certificate where it is |1>. It is `sector`
+/// when `f` is stationary, and otherwise not decided.
+static fn sectored(j: *const judge::Judgment) -> judge::Judgment {
+    let out = clone(j);
+    let (cert, contract) = match &j.cert {
+        Some(c) => {
+            let id = identity(j);
+            let sectors: [judge::Certificate] = [];
+            match id.cert {
+                Some(x) => { sectors.push(x); }
+                None => {}
+            }
+            sectors.push(clone(c));
+            let contract = match strongest(c) {
+                judge::ContractClass::Stat(v) => judge::ContractClass::Sector([phase::<48>::of(0), v]),
+                _ => judge::ContractClass::Unknown,
+            };
+            (Some(judge::Certificate { map: [], schedule: [], sectors: sectors, points: [] }), contract)
+        }
+        None => (None, judge::ContractClass::Unknown),
+    };
+    out.cert = cert;
+    out.contract = contract;
+    out
+}

@@ -1,0 +1,91 @@
+// expect: exit 0
+// stdout: 5 24 10 pop5 m8 f19 c2 k3 [30 20 10] 4 1026|6|0|drain10 44 [1 2 3 4]
+#unit classical
+
+fn show(n: i64) {
+    if n >= 10 { show(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+fn say(n: i64) { show(n); print(" "); }
+
+fn double(x: *i64) -> i64 { *x * 2 }
+fn even(x: i64) -> bool { x % 2 == 0 }
+fn add(a: i64, x: i64) -> i64 { a + x }
+
+// Takes an array and gives it back longer.
+fn grown(xs: [i64], n: i64) -> [i64] {
+    let ys = xs;
+    ys.push(n);
+    ys
+}
+
+fn total(xs: *[i64]) -> i64 {
+    let t = 0;
+    for x in xs { t += *x; }
+    t
+}
+
+fn main() -> i32 {
+    let xs: [i64] = [1, 2, 3];
+    xs.push(4);
+    xs.push(5);
+    say(xs.len() as i64);
+    xs[0] = 10;
+    say(total(&xs));
+    say(xs[0]);
+    match xs.pop() {
+        Some(v) => { print("pop"); say(v); }
+        None => print("none "),
+    }
+    // Functions given by reference, taking elements by reference or by value.
+    let ys = xs.map(&double);
+    print("m"); say(ys[3]);
+    print("f"); say(xs.fold(0, &add));
+    // A closure that captures.
+    let k = 3;
+    let big = &fn(x: *i64) -> bool with (k) { *x > k };
+    let c = xs.as_ref().fold(0, &fn(n: i64, x: *i64) -> i64 with () { n + 1 });
+    let many = xs.filter(big);
+    print("c"); say(many.len() as i64);
+    let odd_out = ys.filter(&even);
+    print("k"); say(odd_out.len() as i64 - 1);
+    // Arrays of arrays.
+    let nested: [[i64]] = [[10], [20, 30]];
+    let flat = nested[1].map(&fn(x: *i64) -> i64 with () { *x });
+    print("[");
+    show(flat[1]); print(" "); show(flat[0]); print(" "); show(nested[0][0]);
+    print("] ");
+    say(c);
+    // Room made ahead, then the length changed around it.
+    let e: [u32] = [0u32; 0];
+    e.reserve(1024);
+    let i = 0;
+    while i < 1026 { e.push(7); i += 1; }
+    show(e.len() as i64);
+    print("|");
+    e.truncate(6);
+    show(e.len() as i64);
+    print("|");
+    e.clear();
+    show(e.len() as i64);
+    print("|");
+    // By value: each element moved out in turn.
+    let ws: [i64] = [10, 20, 30];
+    for w in ws {
+        if w == 10 { print("drain"); say(w); }
+    }
+    say(total(&grown(grown([], 20), 24)));
+    let r: [i64] = [];
+    r = grown(r, 1);
+    r = grown(r, 2);
+    r = grown(grown(r, 3), 4);
+    print("[");
+    for x in &r {
+        show(*x);
+        if *x != 4 { print(" "); }
+    }
+    print("]\n");
+    0
+}

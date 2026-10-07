@@ -1,0 +1,12 @@
+// expect: exit 6
+// A range ending at its type's maximum stops there, without ever computing
+// the successor of 255, which would overflow.
+#unit classical
+
+fn main() -> i32 {
+    let count = 0;
+    for _ in 250u8..=255 {
+        count += 1;
+    }
+    count
+}

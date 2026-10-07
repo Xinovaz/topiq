@@ -1,0 +1,29 @@
+// expect: exit 0
+// stdout: hi
+#unit classical
+
+// Aggregates and strings placed in the program image before it starts.
+
+struct Point { x: i64, y: i64 }
+
+let ORIGIN: const Point = Point { x: 3, y: 4 };
+let COUNTS: [u32; 4] = [0; 4];
+let GREETING: *[char] = "hi\n";
+let TABLE: [Point; 2] = [Point { x: 1, y: 2 }, Point { x: 5, y: 6 }];
+
+fn count(i: usize) { COUNTS[i] += 1; }
+
+fn main() -> i32 {
+    print(GREETING);
+    count(2);
+    count(2);
+    count(0);
+    if COUNTS[2] != 2 || COUNTS[0] != 1 || COUNTS[3] != 0 { return 1; }
+    if ORIGIN.x * ORIGIN.x + ORIGIN.y * ORIGIN.y != 25 { return 2; }
+    if TABLE[1].y != 6 { return 3; }
+    // A constant is a fresh value wherever it is used.
+    let o = ORIGIN;
+    let p = ORIGIN;
+    if o.x + p.y != 7 { return 4; }
+    0
+}

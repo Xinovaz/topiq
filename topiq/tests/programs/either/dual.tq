@@ -1,0 +1,41 @@
+// One routine, translated as a unit of either kind.
+#unit any(classical, quantum(qstart), classical(cstart))
+#alias dit = bool | qubit
+#alias word = u8 | quint<2>
+#if __UNIT_KIND__ == __QUANTUM__
+import gates;
+#define ENTRY [entry]
+#define DISCARD(x) forget x
+#define FRESH(x) let x: dit
+#else
+#define ENTRY
+#define DISCARD(x) drop(x)
+#define FRESH(x) let x: dit = false
+#endif
+
+let STARTED: u32 = 0;
+fn cstart() { STARTED = 1; }
+fn qstart() { STARTED = 2; }
+
+// a summary of every exclusive or of two 2-bit numbers, and of which is the
+// smaller, the same in either kind
+ENTRY
+fn sums(n: u32) -> u32 {
+    let total: u32 = 0;
+    for a in 0..4u8 {
+        for b in 0..4u8 {
+            let x: word = a;
+            let y: word = b;
+            FRESH(less);
+            less ^= x < y;
+            let s = x ^ y;
+            DISCARD(x);
+            DISCARD(y);
+            let v = measure s;
+            let l = measure less;
+            let bit: u32 = if l { 1 } else { 0 };
+            total = total + (v as u32) * 2 + bit;
+        }
+    }
+    total * 10 + STARTED
+}

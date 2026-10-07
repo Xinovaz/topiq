@@ -1,0 +1,8 @@
+// The configuration used when none is given.
+ServerConfig {
+    host: "localhost",
+    port: 8080,
+    tls: null,
+    retries: [1, 2, 4, 8],
+    offset: -3,
+}

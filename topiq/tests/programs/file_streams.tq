@@ -1,0 +1,69 @@
+// expect: exit 0
+// stdout: [one] [two] [three] end
+// stdout: denied while written
+// stdout: denied to write a reading stream
+// stdout: not found / not found
+// stdout: whole: one|two|three
+// Files as streams: written in pieces, the last line without a '\n', and
+// read back a line at a time. A file being written cannot be opened to
+// read, and a stream opened to read cannot write. `fs::Error` is
+// `io::Error`, so either names its variants.
+#unit classical
+
+static fn lines(path: *const [char]) -> Result<(), io::Error> {
+    let file = fs::open(path)?;
+    loop {
+        match file.read_line()? {
+            Some(line) => { print("["); print(&line); print("] "); }
+            None => { break; }
+        }
+    }
+    print("end\n");
+    Ok(())
+}
+
+static fn run() -> Result<(), fs::Error> {
+    let path = "streams_ζ.txt";
+    {
+        let out = fs::create(path)?;
+        out.write("one\r\n")?;
+        out.write("two\nthree")?;
+        match fs::open(path) {
+            Err(fs::Error::Denied) => {}
+            _ => print("opened while written\n"),
+        }
+    }
+    lines(path)?;
+    print("denied while written\n");
+    let input = fs::open(path)?;
+    match input.write("x") {
+        Err(io::Error::Denied) => print("denied to write a reading stream\n"),
+        _ => print("wrote to a reading stream\n"),
+    }
+    match fs::open("missing.txt") {
+        Err(fs::Error::NotFound) => print("not found"),
+        _ => print("found"),
+    }
+    match fs::open("missing.txt") {
+        Err(io::Error::NotFound) => print(" / not found\n"),
+        _ => print(" / found\n"),
+    }
+    let whole = fs::read(path)?;
+    print("whole: ");
+    for c in &whole.chars {
+        if *c == '\n' {
+            print("|");
+        } else if *c != '\r' {
+            print(&[*c]);
+        }
+    }
+    print("\n");
+    Ok(())
+}
+
+fn main() -> i32 {
+    match run() {
+        Ok(()) => 0,
+        Err(_) => 1,
+    }
+}

@@ -1,0 +1,21 @@
+// expect: exit 36
+// A unit-scope object and a persistent one, each starting from its value in
+// the image and changed by the program.
+#unit classical
+
+let CALLS: u32 = 10;
+
+fn next() -> u32 {
+    persist let n: u32 = 0;
+    n += 1;
+    CALLS += 1;
+    n
+}
+
+fn main() -> i32 {
+    let a = next();
+    let b = next();
+    let c = next();
+    // 1 + 2 + 3 is 6, and CALLS went from 10 to 13: 6 + 13 + 17 is 36.
+    (a + b + c + CALLS + 17) as i32
+}

@@ -1,0 +1,18 @@
+// A prefix hierarchy, built without inheritance.
+#unit classical
+
+struct Shape  { kind: u8, area: f64 }
+struct Circle { kind: u8, area: f64, r: f64 }
+struct Rect   { kind: u8, area: f64, w: f64, h: f64 }
+
+fn total(xs: *[*Shape]) -> f64 {
+    let acc = 0.0;
+    for i in 0..xs.len() { acc = acc + xs[i].area; }
+    acc
+}
+
+fn widen(c: *Circle) -> *Shape { c }
+
+fn narrow(s: *Shape) -> f64? {
+    match s as *Circle { Some(c) => Some(c.r), None => None }
+}

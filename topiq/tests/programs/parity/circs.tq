@@ -1,0 +1,248 @@
+// Classical operators on quantum data, checked over every input.
+#unit quantum
+import gates;
+
+// How many of the 64 sums and differences of two 3-bit numbers are right,
+// with the second operand left as it was.
+[entry]
+fn sums(n: u32) -> u32 {
+    let ok: u32 = 0;
+    for a in 0..8u64 {
+        for b in 0..8u64 {
+            let x: quint<3> = a;
+            let y: quint<3> = b;
+            let x = wrapping_add(x, y);
+            let s = measure x;
+            let t = measure y;
+            let hit: u32 = if s as u64 == (a + b) % 8 && t as u64 == b { 1 } else { 0 };
+            ok = ok + hit;
+        }
+    }
+    ok
+}
+
+[entry]
+fn differences(n: u32) -> u32 {
+    let ok: u32 = 0;
+    for a in 0..8u64 {
+        for b in 0..8u64 {
+            let x: quint<3> = a;
+            let y: quint<3> = b;
+            let x = wrapping_sub(x, y);
+            let s = measure x;
+            forget y;
+            let hit: u32 = if s as u64 == (a + 8 - b) % 8 { 1 } else { 0 };
+            ok = ok + hit;
+        }
+    }
+    ok
+}
+
+// Negation, steps, constants, odd products and rotations of every 3-bit
+// number: how many come out right, of 8 * 9.
+[entry]
+fn unary(n: u32) -> u32 {
+    let ok: u32 = 0;
+    for a in 0..8u64 {
+        let x: quint<3> = a;
+        let x = wrapping_neg(x);
+        let hit: u32 = if (measure x) as u64 == (8 - a) % 8 { 1 } else { 0 };
+        ok = ok + hit;
+
+        let x: quint<3> = a;
+        let x = wrapping_inc(x);
+        let hit: u32 = if (measure x) as u64 == (a + 1) % 8 { 1 } else { 0 };
+        ok = ok + hit;
+
+        let x: quint<3> = a;
+        let x = wrapping_dec(x);
+        let hit: u32 = if (measure x) as u64 == (a + 7) % 8 { 1 } else { 0 };
+        ok = ok + hit;
+
+        let x: quint<3> = a;
+        let x = wrapping_add(x, 5);
+        let hit: u32 = if (measure x) as u64 == (a + 5) % 8 { 1 } else { 0 };
+        ok = ok + hit;
+
+        let x: quint<3> = a;
+        let x = wrapping_sub(x, 6);
+        let hit: u32 = if (measure x) as u64 == (a + 2) % 8 { 1 } else { 0 };
+        ok = ok + hit;
+
+        let x: quint<3> = a;
+        let x = wrapping_mul(x, 3);
+        let hit: u32 = if (measure x) as u64 == (a * 3) % 8 { 1 } else { 0 };
+        ok = ok + hit;
+
+        let x: quint<3> = a;
+        let x = wrapping_mul(x, 7);
+        let hit: u32 = if (measure x) as u64 == (a * 7) % 8 { 1 } else { 0 };
+        ok = ok + hit;
+
+        let x: quint<3> = a;
+        let x = rotate_left(x, 1);
+        let hit: u32 = if (measure x) as u64 == ((a * 2) % 8) + a / 4 { 1 } else { 0 };
+        ok = ok + hit;
+
+        let x: quint<3> = a;
+        let x = rotate_right(x, 1);
+        let hit: u32 = if (measure x) as u64 == a / 2 + (a % 2) * 4 { 1 } else { 0 };
+        ok = ok + hit;
+    }
+    ok
+}
+
+// Comparisons and bitwise operators between every pair of 2-bit numbers,
+// as conditions and as new values: how many pairs come out right, of 16.
+// Each pair adds one to the count, so that the count read as the circuit
+// runs stays a short expression.
+[entry]
+fn pairs(n: u32) -> u32 {
+    let ok: u32 = 0;
+    for a in 0..4u64 {
+        for b in 0..4u64 {
+            let x: quint<2> = a;
+            let y: quint<2> = b;
+            let t: [qubit; 6];
+            t[0] ^= x == y;
+            t[1] ^= x != y;
+            t[2] ^= x < y;
+            t[3] ^= x <= y;
+            t[4] ^= x > y;
+            t[5] ^= x >= y;
+            let m = measure t;
+            let p = x ^ y;
+            let q = x & y;
+            let r = x | y;
+            let (vp, vq, vr) = ((measure p) as u64, (measure q) as u64, (measure r) as u64);
+            let good = m[0] == (a == b) && m[1] == (a != b) && m[2] == (a < b) && m[3] == (a <= b)
+                && m[4] == (a > b) && m[5] == (a >= b)
+                && vp == a ^ b && vq == (a & b) && vr == (a | b);
+            let hit: u32 = if good { 1 } else { 0 };
+            ok = ok + hit;
+            forget x;
+            forget y;
+        }
+    }
+    ok
+}
+
+// Each bit-level operator on qubits, against its truth table: of 4 * 7.
+[entry]
+fn bits(n: u32) -> u32 {
+    let ok: u32 = 0;
+    for a in 0..2u32 {
+        for b in 0..2u32 {
+            let p: qubit;
+            let q: qubit;
+            p ^= a == 1;
+            q ^= b == 1;
+            let t: [qubit; 7];
+            t[0] ^= p;
+            t[1] ^= p & q;
+            t[2] ^= p | q;
+            t[3] ^= p ^ q;
+            t[4] ^= !p;
+            t[5] ^= p == q;
+            t[6] ^= p && !q;
+            let m = measure t;
+            let (x, y) = (a == 1, b == 1);
+            let want = [x, x && y, x || y, x != y, !x, x == y, x && !y];
+            for i in 0..7 {
+                let hit: u32 = if m[i] == want[i] { 1 } else { 0 };
+                ok = ok + hit;
+            }
+            forget p;
+            forget q;
+        }
+    }
+    ok
+}
+
+// The measured type of a `quint<12>`, and a register flipped from a constant.
+[entry]
+fn widths(n: u32) -> u16 {
+    let x: quint<12> = 3000;
+    let r: [qubit; 4];
+    r ^= 0b1010;
+    let m = measure r;
+    let v: u16 = measure x;
+    if m[0] && !m[1] && m[2] && !m[3] { v } else { 0 }
+}
+
+// A Bell pair and its copy, whose halves each agree; and a sum made with
+// scratch qubits given back, copied with them: whether all of that held.
+[entry]
+fn copies(n: u32) -> bool {
+    let r: [qubit; 2];
+    h(&r[0]);
+    r[1] ^= r[0];
+    let s = qcopy(&r);
+    let x: quint<3> = 2;
+    let x = wrapping_add(x, 5);
+    let y = qcopy(&x);
+    let (mr, ms) = (measure r, measure s);
+    let (mx, my) = (measure x, measure y);
+    mr[0] == mr[1] && ms[0] == ms[1] && mx == 7 && my == 7
+}
+
+struct Inner { q: [qubit; 2], tag: u8 }
+struct Outer { a: Inner, b: qubit, n: u32 }
+
+// A nested structure with classical fields, its three qubits entangled with
+// one another, and its copy: whether each holds three equal bits, and the
+// classical fields came along.
+[entry]
+fn nested(n: u32) -> bool {
+    let i = Inner { q: prep |00>, tag: 7 };
+    h(&i.q[0]);
+    i.q[1] ^= i.q[0];
+    let b: qubit;
+    b ^= i.q[1];
+    let o = Outer { a: i, b: b, n: 42 };
+    let c = qcopy(&o);
+    let (m, k) = (measure o, measure c);
+    m.0.0[0] == m.0.0[1] && m.0.0[1] == m.1 && k.0.0[0] == k.0.0[1] && k.0.0[1] == k.1
+        && m.0.1 == 7 && k.0.1 == 7 && m.2 == 42 && k.2 == 42
+}
+
+enum QB { Zero(qubit), One(qubit) }
+
+// Each variant of a quantum enumeration, its payload in |+>, and its copy:
+// whether both measure as the variant made.
+[entry]
+fn variants(n: u32) -> bool {
+    let all = true;
+    for v in 0..2u32 {
+        let p: qubit;
+        h(&p);
+        let e = if v == 0 { QB::Zero(p) } else { QB::One(p) };
+        let f = qcopy(&e);
+        let a = match measure e { QB::Zero(q) => { forget q; 0u32 }, QB::One(q) => { forget q; 1u32 } };
+        let b = match measure f { QB::Zero(q) => { forget q; 0u32 }, QB::One(q) => { forget q; 1u32 } };
+        all = all && a == v && b == v;
+    }
+    all
+}
+
+// A classical type whose `$copy` counts the copies made of it.
+struct Stamp { n: u32 }
+
+impl Stamp {
+    fn $copy(self: *const Stamp) -> Stamp { Stamp { n: self.n + 1 } }
+}
+
+struct Stamped { q: qubit, s: Stamp, pair: (Stamp, u8), row: [Stamp; 2] }
+
+// A quantum value holding stamps directly, in a tuple and in an array, and
+// its copy: whether each of the copy's stamps was made by `$copy`.
+[entry]
+fn stamps(n: u32) -> bool {
+    let q: qubit;
+    q ^= true;
+    let x = Stamped { q: q, s: Stamp { n: 1 }, pair: (Stamp { n: 10 }, 3), row: [Stamp { n: 20 }, Stamp { n: 30 }] };
+    let y = qcopy(&x);
+    let (mx, my) = (measure x, measure y);
+    mx.0 && my.0 && mx.1.n == 1 && my.1.n == 2 && my.2.0.n == 11 && my.2.1 == 3
+        && my.3[0].n == 21 && my.3[1].n == 31
+}

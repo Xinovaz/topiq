@@ -1,0 +1,43 @@
+// expect: exit 42
+#unit classical
+
+struct Point { x: i64, y: i64 }
+struct Rect { min: Point, max: Point }
+
+fn width(r: *Rect) -> i64 { r.max.x - r.min.x }
+fn height(r: *Rect) -> i64 { r.max.y - r.min.y }
+
+// Takes the rectangle by value: the caller's copy is this function's own.
+fn area(r: Rect) -> i64 {
+    width(&r) * height(&r)
+}
+
+// Assigning a parameter changes only the callee's copy.
+fn shifted(p: Point, dx: i64) -> Point {
+    p.x += dx;
+    p
+}
+
+// Changes the caller's rectangle, through a reference.
+fn grow(r: *Rect, by: i64) {
+    r.max.x += by;
+    r.max.y += by;
+}
+
+fn square(side: i64) -> Rect {
+    Rect { min: Point { x: 0, y: 0 }, max: Point { x: side, y: side } }
+}
+
+fn main() -> i32 {
+    let origin = Point { x: 0, y: 0 };
+    let corner = Point { y: 4, x: 3 };
+    let r = Rect { min: origin, max: corner };
+    grow(&r, 1);
+    let a = area(r);
+    let q = shifted(Point { x: 1, y: 2 }, 10);
+    let s = Point { x: 5, y: 5 };
+    s.y = s.x + q.x;
+    // The call's result is stored nowhere, so `&` refers to a temporary.
+    let side = width(&square(4));
+    (a + s.y + q.y + side) as i32
+}

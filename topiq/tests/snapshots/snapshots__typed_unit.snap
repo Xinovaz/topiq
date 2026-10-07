@@ -1,0 +1,32 @@
+---
+source: tests/snapshots.rs
+expression: "topiq::tir::print::unit(out.tir().expect(\"analysis ran\"), session.interner())"
+---
+unit classical
+  global LIMIT: const u32 = 10u32
+  global TOTAL: u64 = 0u64
+  global persist in step calls: u32 = 0u32
+  fn square(n#0: constexpr u32) -> u32  [constant: evaluated, never compiled]
+    => (n#0 * n#0)
+  fn step(i#0: u32) -> u64
+    calls = (calls + 1u32)
+    =>
+      if: u64 ((i#0 % 2u32) == 0u32)
+      then
+        => (i#0 as u64)
+      else
+        block: u64
+          => ((i#0 * 3u32) as u64)
+  fn main() -> i32
+    let k#0: u32 = 0u32
+    for L0 i#1 in 0u32..10u32
+      TOTAL = (TOTAL + step(i#1))
+    while L1 ((k#0 < 9u32) && (TOTAL > 0u64))
+      k#0 = (k#0 + 1u32)
+    let bonus#2: u32 =
+      loop L2: u32
+        if: void (k#0 > 5u32)
+        then
+          break L2 k#0
+        k#0 = (k#0 + 1u32)
+    => ((TOTAL as i32) + (bonus#2 as i32))

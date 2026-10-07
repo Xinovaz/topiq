@@ -1,0 +1,23 @@
+// The Topiq language server, as the LSP package starts it.
+//
+// Override any of these in Packages/User/Topiq.sublime-settings, from
+// Preferences > Package Settings > Topiq > Settings, or per project under
+// "settings" > "LSP" > "Topiq" in the .sublime-project file.
+{
+	// Set to false to keep the syntaxes but not start the server.
+	"enabled": true,
+
+	// `tqls` on PATH, as `cargo install --path tqls` leaves it. Give the full
+	// path here if it is elsewhere.
+	"command": ["tqls"],
+
+	// Topiq source only. A `.quon` document is not a program, so the server
+	// is not started for one.
+	"selector": "source.topiq",
+
+	"initialization_options": {
+		// Directories searched for imported units, besides the importing
+		// file's own, relative to the first folder of the window.
+		"unitPath": []
+	}
+}

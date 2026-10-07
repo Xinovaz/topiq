@@ -1,0 +1,55 @@
+// expect: exit 0
+// stdout: 49 16 10 10 8 3
+#unit classical
+
+fn print_small(n: i64) {
+    if n >= 10 { print_small(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+fn square(x: i64) -> i64 { x * x }
+fn negate(x: i64) -> i64 { -x }
+
+// A function is a value of a function type, and `&f` a reference to it.
+fn twice(f: *fn(i64) -> i64, x: i64) -> i64 { f(f(x)) }
+
+fn apply(c: *closure<fn(i64) -> i64>, x: i64) -> i64 { c(x) }
+
+fn pick(big: bool) -> fn(i64) -> i64 { if big { square } else { negate } }
+
+struct Counter { step: i64 }
+
+fn main() -> i32 {
+    let n: i64 = 7;
+    let f = square;
+    print_small(f(n));
+    print(" ");
+    print_small(twice(&square, 2));
+    print(" ");
+
+    // The closure of the specification's example.
+    let add = fn(x: i64) -> i64 with (n) { x + n };
+    print_small(apply(&add, 3));
+    print(" ");
+
+    // Captured by reference.
+    let k = 5;
+    let times = fn(x: i64) -> i64 with (&k) { x * k };
+    print_small(times(2));
+    print(" ");
+
+    // A closure that captures nothing is a plain `*fn`.
+    let next: *fn(i64) -> i64 = fn(x: i64) -> i64 with () { x + 1 };
+    print_small(twice(next, 6));
+    print(" ");
+
+    // A structure moved into the environment, and a function returned.
+    let c = Counter { step: 3 };
+    let stepper = fn(x: i64) -> i64 with (c) { x + c.step };
+    let g = pick(false);
+    print_small(g(stepper(-6)));
+    print("\n");
+    if pick(true)(3) != 9 { return 1; }
+    0
+}

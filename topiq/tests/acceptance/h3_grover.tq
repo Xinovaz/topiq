@@ -1,0 +1,47 @@
+// expect: clean
+// H.3, the Grover iterate typed over its orbit, as printed, with the
+// oracle and the diffusion operator it names but does not define (Issues
+// item 171), and assertions of what its judgement is.
+#unit quantum
+import gates;
+import judge;
+
+// The three points of the orbit, written out. N = 4, marked point |11>.
+// s is the uniform superposition; m is the marked point; s' = G(G(s)).
+cover Orb  = fin{ (|00> + |01> + |10> + |11>) / 2,
+                  |11>,
+                  (-|00> - |01> - |10> + |11>) / 2 };
+gauge GOrb = fid((|00> + |01> + |10> + |11>) / 2);   // one fiducial suffices
+base  Torb = [qubit; 2], Orb, GOrb;
+
+[cover: Orb] [gauge: GOrb]
+[expect: contract = cyc]
+fn iterate(r: *[qubit; 2]) { oracle(r); diffuse(r); }
+
+chain Loop = iterate : Torb -> Torb ;
+@static_assert(@holonomy(Loop, |11>) == phase::<8>::of(4), "loop holonomy is pi");
+
+// The marked point's phase flipped.
+fn oracle(r: *[qubit; 2]) { cz(&r[0], &r[1]); }
+
+// The reflection about the uniform superposition, 2|s><s| - I.
+fn diffuse(r: *[qubit; 2]) {
+    h(&r[0]); h(&r[1]);
+    x(&r[0]); x(&r[1]);
+    cz(&r[0], &r[1]);
+    x(&r[0]); x(&r[1]);
+    h(&r[0]); h(&r[1]);
+    gphase(phase::<8>::of(4));
+}
+
+// The base map cycles the three points, with the schedule (0, π, 0).
+@static_assert(
+    match @judgment(iterate).contract {
+        judge::ContractClass::Cyc(s) => s.len() == 3 && s[0] == phase::<48>::of(0)
+            && s[1] == phase::<48>::of(24) && s[2] == phase::<48>::of(0),
+        _ => false,
+    },
+    "the schedule is (0, pi, 0)"
+);
+@static_assert(@certificate(iterate).map[0] == 1 && @certificate(iterate).map[1] == 2
+    && @certificate(iterate).map[2] == 0, "the base map cycles the orbit");

@@ -1,0 +1,34 @@
+// expect: exit 0
+// stdout: 4 30 40 / 7 same
+// Taking references apart into their words and putting them back together.
+#unit classical
+
+struct Point { x: i64, y: i64 }
+
+fn show(n: i64) {
+    if n >= 10 { show(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+fn main() -> i32 {
+    let xs = [10 as i64, 20, 30, 40];
+    let all: *[i64] = &xs;
+    let (addr, n) = @raw_parts(all);
+    show(n as i64);
+    // The last two elements, as a slice of their own.
+    let tail: *[i64] = @from_raw_parts(addr + 16, 2);
+    print(" ");
+    show(tail[0]);
+    print(" ");
+    show(tail[1]);
+    print(" / ");
+
+    let p = Point { x: 7, y: 9 };
+    let (at, ti) = @raw_parts(&p);
+    let q: *Point = @from_raw_parts(at, ti);
+    show(q.x);
+    print(if ti == @typeinfo(Point) { " same" } else { " different" });
+    print("\n");
+    0
+}

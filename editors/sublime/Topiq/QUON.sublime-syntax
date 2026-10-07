@@ -1,0 +1,196 @@
+%YAML 1.2
+---
+# QUON documents: named quantum states, read by `@embed("states.quon")`.
+#
+# A document is a sequence of items, each a name, a register type and a
+# state, ended by `;` or `,`:
+#
+#   bell: [qubit; 2] = (|00> + |11>) * isq2;
+#   plus: qubit = (|0> + |1>) * isq2;
+#
+# The whole file is a quantum context, so `i`, `isq2` and `w(k, N)` are always
+# the exact scalars, and `|01>` is always a ket when its pieces touch.
+name: QUON
+scope: source.quon
+version: 2
+file_extensions:
+  - quon
+
+variables:
+  ident: '[A-Za-z_][A-Za-z0-9_]*'
+  int_suffix: (?:usize|isize|u8|u16|u32|u64|i8|i16|i32|i64)
+  float_suffix: (?:f32|f64)
+  exponent: (?:[eE][+-]?[0-9]+)
+
+contexts:
+  prototype:
+    - include: comments
+
+  main:
+    # `name:` begins an item
+    - match: ({{ident}})\s*(:)(?!:)
+      captures:
+        1: entity.name.constant.quon
+        2: punctuation.separator.type.quon
+      push: item-type
+    - include: separators
+
+  ##############
+  ## COMMENTS ##
+  ##############
+
+  comments:
+    - match: //
+      scope: punctuation.definition.comment.quon
+      push: line-comment
+    - match: /\*
+      scope: punctuation.definition.comment.begin.quon
+      push: block-comment
+
+  line-comment:
+    - meta_include_prototype: false
+    - meta_scope: comment.line.double-slash.quon
+    - match: $\n?
+      pop: true
+
+  block-comment:
+    - meta_include_prototype: false
+    - meta_scope: comment.block.quon
+    # block comments do not nest: the first `*/` ends one
+    - match: \*/
+      scope: punctuation.definition.comment.end.quon
+      pop: true
+
+  ###########
+  ## ITEMS ##
+  ###########
+
+  # the register type, up to the `=` that begins the state
+  item-type:
+    - meta_content_scope: meta.type.quon
+    - match: (?==)
+      set: item-state
+    - match: \[
+      scope: punctuation.section.brackets.begin.quon
+    - match: \]
+      scope: punctuation.section.brackets.end.quon
+    - match: ;
+      scope: punctuation.separator.quon
+    - match: '::'
+      scope: punctuation.accessor.double-colon.quon
+    - match: \bqubit\b
+      scope: storage.type.quon
+    - match: \b[0-9][0-9_]*\b
+      scope: constant.numeric.integer.decimal.quon
+    - match: \b{{ident}}(?=\s*::)
+      scope: variable.namespace.quon
+    - match: \b[A-Z][A-Z0-9_]*[A-Z0-9]\b
+      scope: constant.other.quon
+    - match: \b{{ident}}\b
+      scope: support.type.quon
+    # an item cut short, so the next one still reads
+    - match: (?=[,}])
+      pop: true
+
+  # the state, up to the `;` or `,` that ends the item
+  item-state:
+    - match: =
+      scope: keyword.operator.assignment.quon
+      set: state
+
+  state:
+    - meta_content_scope: meta.state.quon
+    - match: '[;,]'
+      scope: punctuation.terminator.quon
+      pop: true
+    # the next item began without a terminator
+    - match: (?={{ident}}\s*:(?!:))
+      pop: true
+    - include: state-body
+
+  state-group:
+    - match: \)
+      scope: punctuation.section.group.end.quon
+      pop: true
+    - include: state-body
+
+  state-body:
+    - match: \(
+      scope: punctuation.section.group.begin.quon
+      push: state-group
+    - match: \)
+      scope: invalid.illegal.stray-bracket.quon
+    - include: kets
+    - include: scalars
+    - include: numbers
+    - include: operators
+    - match: \b{{ident}}\b
+      scope: variable.other.state.quon
+
+  separators:
+    - match: '[;,]'
+      scope: punctuation.terminator.quon
+
+  ############
+  ## STATES ##
+  ############
+
+  kets:
+    - match: (\|)[01]+(>)
+      scope: constant.other.ket.quon
+      captures:
+        1: punctuation.definition.ket.begin.quon
+        2: punctuation.definition.ket.end.quon
+    # a ket holds basis digits only: `|+>` is `(|0> + |1>) * isq2`
+    - match: \|[+-]>
+      scope: invalid.illegal.ket.quon
+
+  scalars:
+    # `w(k, N)`, the root of unity
+    - match: \b(w)\s*(\()
+      captures:
+        1: constant.language.exact.quon
+        2: punctuation.section.group.begin.quon
+      push: root-of-unity
+    - match: \b(?:i|isq2)\b
+      scope: constant.language.exact.quon
+
+  root-of-unity:
+    - match: \)
+      scope: punctuation.section.group.end.quon
+      pop: true
+    - match: ','
+      scope: punctuation.separator.comma.quon
+    - include: numbers
+
+  numbers:
+    - match: \b(0[xX])[0-9A-Fa-f_]+({{int_suffix}})?\b
+      scope: constant.numeric.integer.hexadecimal.quon
+      captures:
+        1: punctuation.definition.numeric.base.quon
+        2: storage.type.numeric.quon
+    - match: \b(0[bB])[01_]+({{int_suffix}})?\b
+      scope: constant.numeric.integer.binary.quon
+      captures:
+        1: punctuation.definition.numeric.base.quon
+        2: storage.type.numeric.quon
+    - match: \b(0[oO])[0-7_]+({{int_suffix}})?\b
+      scope: constant.numeric.integer.octal.quon
+      captures:
+        1: punctuation.definition.numeric.base.quon
+        2: storage.type.numeric.quon
+    - match: \b[0-9][0-9_]*(?:\.[0-9][0-9_]*{{exponent}}?|{{exponent}})({{float_suffix}})?\b
+      scope: constant.numeric.float.decimal.quon
+      captures:
+        1: storage.type.numeric.quon
+    - match: \b[0-9][0-9_]*({{int_suffix}})?\b
+      scope: constant.numeric.integer.decimal.quon
+      captures:
+        1: storage.type.numeric.quon
+
+  operators:
+    # `**` is the tensor product
+    - match: \*\*
+      scope: keyword.operator.tensor.quon
+    - match: '[-+*/]'
+      scope: keyword.operator.arithmetic.quon

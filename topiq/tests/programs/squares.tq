@@ -1,0 +1,11 @@
+// expect: exit 385
+// An inclusive range, compound assignment, and an exit status above 255.
+#unit classical
+
+fn main() -> i32 {
+    let total = 0;
+    for i in 1..=10 {
+        total += i * i;
+    }
+    total
+}

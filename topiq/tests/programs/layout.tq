@@ -1,0 +1,33 @@
+// expect: exit 0
+#unit classical
+
+struct Header { tag: u8, len: u32 }
+
+[packed]
+struct Packed { tag: u8, len: u32 }
+
+[align: 16]
+struct Wide { x: u8 }
+
+enum Small { A, B, C }
+enum Payload { Nothing, Word(u32), Pair(u8, u16) }
+
+[repr: u32]
+enum Tagged { X, Y }
+
+fn main() -> i32 {
+    if @sizeof(Header) != 8 || @alignof(Header) != 4 { return 1; }
+    if @sizeof(Packed) != 5 || @alignof(Packed) != 1 { return 2; }
+    if @sizeof(Wide) != 16 || @alignof(Wide) != 16 { return 3; }
+    if @sizeof(Small) != 1 { return 4; }
+    if @sizeof(Payload) != 8 { return 5; }
+    if @sizeof(Tagged) != 4 { return 6; }
+    if @sizeof([Header; 3]) != 24 { return 7; }
+    if @sizeof(*Header) != 16 || @sizeof(*[u8]) != 16 { return 8; }
+    // A packed field is read and written at whatever address it has.
+    let p = Packed { tag: 1, len: 70000 };
+    p.len += 1;
+    if p.len != 70001 || p.tag != 1 { return 9; }
+    let t = Tagged::Y;
+    match t { Tagged::X => 10, Tagged::Y => 0 }
+}

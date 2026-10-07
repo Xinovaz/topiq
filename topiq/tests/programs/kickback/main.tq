@@ -1,0 +1,23 @@
+// expect: exit 0
+// stdout: marked refused
+// A supplied operator is checked, as the circuit runs, for leaving the
+// ancilla it kicks a phase back through as it was given.
+#unit classical
+import circs;
+import qpu;
+
+fn main() -> i32 {
+    let dev = qpu::connect("sim://exact").unwrap();
+    match dev.run(circs::kick, circs::mark, 0) {
+        Ok(b) => { if b { print("marked"); } else { print("unmarked"); } }
+        Err(_) => print("failed"),
+    }
+    print(" ");
+    match dev.run(circs::kick, circs::spoil, 0) {
+        Ok(_) => print("ran"),
+        Err(qpu::Error::NotKept(_)) => print("refused"),
+        Err(_) => print("failed"),
+    }
+    print("\n");
+    0
+}

@@ -1,0 +1,20 @@
+[package]
+name = "tqls"
+version = "0.1.0"
+edition = "2024"
+description = "The Topiq language server"
+license = "MIT"
+
+[dependencies]
+# The frontend alone: a language server stops at type checking, so it never
+# needs LLVM and builds wherever the frontend does.
+topiq = { path = "../topiq", default-features = false }
+
+# The protocol: the message loop, and the types it carries. 0.95 rather than
+# later, whose `Uri` cannot convert to and from a file path.
+lsp-server = "0.10.0"
+lsp-types = "0.95"
+serde_json = "1.0.151"
+
+[dev-dependencies]
+tempfile = "3"

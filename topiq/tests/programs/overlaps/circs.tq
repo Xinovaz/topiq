@@ -1,0 +1,27 @@
+// Inner products read from the statistics of one bit.
+#unit quantum
+import gates;
+import algo;
+
+// The swap test of two qubits, in the states they are given.
+[entry]
+fn swap_pair(a: *[qubit; 1], b: *[qubit; 1]) -> bool {
+    algo::swap_test(a, b)
+}
+
+// T, whose expectation in a state the Hadamard test reads.
+fn eighth(r: *[qubit; 1]) {
+    t(&r[0]);
+}
+
+// The Hadamard test of T: its real part.
+[entry]
+fn hadamard_re(r: *[qubit; 1]) -> bool {
+    algo::hadamard_test(eighth, r, false)
+}
+
+// The Hadamard test of T: its imaginary part.
+[entry]
+fn hadamard_im(r: *[qubit; 1]) -> bool {
+    algo::hadamard_test(eighth, r, true)
+}

@@ -1,0 +1,418 @@
+---
+source: tests/snapshots.rs
+expression: "out.llvm_ir.expect(\"code generation ran\")"
+---
+; ModuleID = 'aggregates'
+source_filename = "aggregates"
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+
+@string.0 = private unnamed_addr constant [6 x i32] [i32 99, i32 105, i32 114, i32 99, i32 108, i32 101], align 4
+@string.1 = private unnamed_addr constant [4 x i32] [i32 114, i32 101, i32 99, i32 116], align 4
+@"topiq$aggregates$NAMES" = global <{ { ptr, i64 }, { ptr, i64 } }> <{ { ptr, i64 } { ptr @string.0, i64 6 }, { ptr, i64 } { ptr @string.1, i64 4 } }>, align 8
+@abort.message.0 = private unnamed_addr constant [65 x i8] c"topiq: abort RA01 at aggregates:12: integer arithmetic overflow\0A\00", align 1
+@abort.message.1 = private unnamed_addr constant [65 x i8] c"topiq: abort RA01 at aggregates:13: integer arithmetic overflow\0A\00", align 1
+@abort.message.2 = private unnamed_addr constant [65 x i8] c"topiq: abort RA01 at aggregates:18: integer arithmetic overflow\0A\00", align 1
+@constant.0 = private unnamed_addr constant <{ i32, i32 }> zeroinitializer, align 4
+@abort.message.3 = private unnamed_addr constant [57 x i8] c"topiq: abort RA06 at aggregates:24: index out of bounds\0A\00", align 1
+@"topiq$ti$aggregates$3a$3aShape" = external global i8
+@abort.message.4 = private unnamed_addr constant [65 x i8] c"topiq: abort RA01 at aggregates:24: integer arithmetic overflow\0A\00", align 1
+@"topiq$ti$aggregates$3a$3aPoint" = external global i8
+@abort.message.5 = private unnamed_addr constant [57 x i8] c"topiq: abort RA06 at aggregates:27: index out of bounds\0A\00", align 1
+@abort.message.6 = private unnamed_addr constant [65 x i8] c"topiq: abort RA01 at aggregates:28: integer arithmetic overflow\0A\00", align 1
+
+declare i32 @_write(i32, ptr, i32)
+
+; Function Attrs: noreturn
+declare void @_exit(i32) #0
+
+; Function Attrs: cold noinline noreturn nounwind
+define internal void @"topiq$abort"(ptr %0, i32 %1) #1 {
+entry:
+  %2 = call i32 @_write(i32 2, ptr %0, i32 %1)
+  call void @_exit(i32 101)
+  unreachable
+}
+
+define i32 @"topiq$aggregates$area"({ ptr, ptr } %0) {
+entry:
+  %match.value = alloca i32, align 4
+  %s = alloca { ptr, ptr }, align 8
+  store { ptr, ptr } %0, ptr %s, align 8
+  %r = alloca i32, align 4
+  %w = alloca i32, align 4
+  %h = alloca i32, align 4
+  %1 = load { ptr, ptr }, ptr %s, align 8
+  %2 = extractvalue { ptr, ptr } %1, 0
+  %tag = load i8, ptr %2, align 4
+  %is.variant = icmp eq i8 %tag, 0
+  br i1 %is.variant, label %arm.test, label %arm.next
+
+match.end:                                        ; preds = %checked12, %checked6, %arm.test
+  %3 = load i32, ptr %match.value, align 4
+  ret i32 %3
+
+arm.next:                                         ; preds = %entry
+  %tag2 = load i8, ptr %2, align 4
+  %is.variant3 = icmp eq i8 %tag2, 1
+  br i1 %is.variant3, label %arm.test4, label %arm.next1
+
+arm.test:                                         ; preds = %entry
+  store i32 0, ptr %match.value, align 4
+  br label %match.end
+
+arm.next1:                                        ; preds = %arm.next
+  %tag8 = load i8, ptr %2, align 4
+  %is.variant9 = icmp eq i8 %tag8, 2
+  br i1 %is.variant9, label %arm.test10, label %arm.next7
+
+arm.test4:                                        ; preds = %arm.next
+  %4 = getelementptr inbounds i8, ptr %2, i64 4
+  %5 = load i32, ptr %4, align 4
+  store i32 %5, ptr %r, align 4
+  %6 = load i32, ptr %r, align 4
+  %7 = call { i32, i1 } @llvm.smul.with.overflow.i32(i32 3, i32 %6)
+  %8 = extractvalue { i32, i1 } %7, 0
+  %9 = extractvalue { i32, i1 } %7, 1
+  br i1 %9, label %abort.RA01, label %checked
+
+abort.RA01:                                       ; preds = %arm.test4
+  call void @"topiq$abort"(ptr @abort.message.0, i32 64)
+  unreachable
+
+checked:                                          ; preds = %arm.test4
+  %10 = load i32, ptr %r, align 4
+  %11 = call { i32, i1 } @llvm.smul.with.overflow.i32(i32 %8, i32 %10)
+  %12 = extractvalue { i32, i1 } %11, 0
+  %13 = extractvalue { i32, i1 } %11, 1
+  br i1 %13, label %abort.RA015, label %checked6
+
+abort.RA015:                                      ; preds = %checked
+  call void @"topiq$abort"(ptr @abort.message.0, i32 64)
+  unreachable
+
+checked6:                                         ; preds = %checked
+  store i32 %12, ptr %match.value, align 4
+  br label %match.end
+
+arm.next7:                                        ; preds = %arm.next1
+  unreachable
+
+arm.test10:                                       ; preds = %arm.next1
+  %14 = getelementptr inbounds i8, ptr %2, i64 12
+  %15 = load i32, ptr %14, align 4
+  store i32 %15, ptr %w, align 4
+  %16 = getelementptr inbounds i8, ptr %2, i64 16
+  %17 = load i32, ptr %16, align 4
+  store i32 %17, ptr %h, align 4
+  %18 = load i32, ptr %w, align 4
+  %19 = load i32, ptr %h, align 4
+  %20 = call { i32, i1 } @llvm.smul.with.overflow.i32(i32 %18, i32 %19)
+  %21 = extractvalue { i32, i1 } %20, 0
+  %22 = extractvalue { i32, i1 } %20, 1
+  br i1 %22, label %abort.RA0111, label %checked12
+
+abort.RA0111:                                     ; preds = %arm.test10
+  call void @"topiq$abort"(ptr @abort.message.1, i32 64)
+  unreachable
+
+checked12:                                        ; preds = %arm.test10
+  store i32 %21, ptr %match.value, align 4
+  br label %match.end
+}
+
+define void @"topiq$aggregates$grow"({ ptr, ptr } %0, i32 %1) {
+entry:
+  %p = alloca { ptr, ptr }, align 8
+  store { ptr, ptr } %0, ptr %p, align 8
+  %by = alloca i32, align 4
+  store i32 %1, ptr %by, align 4
+  %2 = load { ptr, ptr }, ptr %p, align 8
+  %3 = extractvalue { ptr, ptr } %2, 0
+  %4 = load i32, ptr %3, align 4
+  %5 = load i32, ptr %by, align 4
+  %6 = call { i32, i1 } @llvm.sadd.with.overflow.i32(i32 %4, i32 %5)
+  %7 = extractvalue { i32, i1 } %6, 0
+  %8 = extractvalue { i32, i1 } %6, 1
+  br i1 %8, label %abort.RA01, label %checked
+
+abort.RA01:                                       ; preds = %entry
+  call void @"topiq$abort"(ptr @abort.message.2, i32 64)
+  unreachable
+
+checked:                                          ; preds = %entry
+  %9 = load { ptr, ptr }, ptr %p, align 8
+  %10 = extractvalue { ptr, ptr } %9, 0
+  store i32 %7, ptr %10, align 4
+  ret void
+}
+
+define i32 @"topiq$aggregates$main"() {
+entry:
+  %shapes = alloca [40 x i8], align 4
+  %total = alloca i32, align 4
+  %i = alloca i64, align 8
+  %p = alloca [8 x i8], align 4
+  store i8 1, ptr %shapes, align 4
+  %0 = getelementptr inbounds i8, ptr %shapes, i64 4
+  store i32 2, ptr %0, align 4
+  %1 = getelementptr inbounds i8, ptr %shapes, i64 20
+  store i8 2, ptr %1, align 4
+  %2 = getelementptr inbounds i8, ptr %1, i64 4
+  call void @llvm.memcpy.p0.p0.i64(ptr align 4 %2, ptr align 4 @constant.0, i64 8, i1 false)
+  %3 = getelementptr inbounds i8, ptr %1, i64 12
+  store i32 3, ptr %3, align 4
+  %4 = getelementptr inbounds i8, ptr %1, i64 16
+  store i32 4, ptr %4, align 4
+  store i32 0, ptr %total, align 4
+  store i64 0, ptr %i, align 8
+  br i1 true, label %for.body, label %for.end
+
+for.body:                                         ; preds = %for.next, %entry
+  %5 = load i32, ptr %total, align 4
+  %6 = load i64, ptr %i, align 8
+  %out.of.bounds = icmp uge i64 %6, 2
+  br i1 %out.of.bounds, label %abort.RA06, label %checked
+
+for.next:                                         ; preds = %checked1
+  %7 = load i64, ptr %i, align 8
+  %8 = add i64 %7, 1
+  store i64 %8, ptr %i, align 8
+  %9 = icmp eq i64 %8, 2
+  br i1 %9, label %for.end, label %for.body
+
+for.end:                                          ; preds = %for.next, %entry
+  %10 = getelementptr inbounds i8, ptr %p, i64 4
+  store i32 1, ptr %10, align 4
+  store i32 2, ptr %p, align 4
+  %11 = insertvalue { ptr, ptr } undef, ptr %p, 0
+  %12 = insertvalue { ptr, ptr } %11, ptr @"topiq$ti$aggregates$3a$3aPoint", 1
+  call void @"topiq$aggregates$grow"({ ptr, ptr } %12, i32 5)
+  br i1 false, label %abort.RA062, label %checked3
+
+abort.RA06:                                       ; preds = %for.body
+  call void @"topiq$abort"(ptr @abort.message.3, i32 56)
+  unreachable
+
+checked:                                          ; preds = %for.body
+  %13 = mul nuw i64 %6, 20
+  %14 = getelementptr inbounds i8, ptr %shapes, i64 %13
+  %15 = insertvalue { ptr, ptr } undef, ptr %14, 0
+  %16 = insertvalue { ptr, ptr } %15, ptr @"topiq$ti$aggregates$3a$3aShape", 1
+  %17 = call i32 @"topiq$aggregates$area"({ ptr, ptr } %16)
+  %18 = call { i32, i1 } @llvm.sadd.with.overflow.i32(i32 %5, i32 %17)
+  %19 = extractvalue { i32, i1 } %18, 0
+  %20 = extractvalue { i32, i1 } %18, 1
+  br i1 %20, label %abort.RA01, label %checked1
+
+abort.RA01:                                       ; preds = %checked
+  call void @"topiq$abort"(ptr @abort.message.4, i32 64)
+  unreachable
+
+checked1:                                         ; preds = %checked
+  store i32 %19, ptr %total, align 4
+  br label %for.next
+
+abort.RA062:                                      ; preds = %for.end
+  call void @"topiq$abort"(ptr @abort.message.5, i32 56)
+  unreachable
+
+checked3:                                         ; preds = %for.end
+  %21 = load { ptr, i64 }, ptr getelementptr inbounds (i8, ptr @"topiq$aggregates$NAMES", i64 16), align 8
+  %22 = extractvalue { ptr, i64 } %21, 0
+  %23 = extractvalue { ptr, i64 } %21, 1
+  call void @"topiq$print"(i32 1, ptr %22, i64 %23)
+  %24 = load i32, ptr %total, align 4
+  %25 = load i32, ptr %p, align 4
+  %26 = call { i32, i1 } @llvm.sadd.with.overflow.i32(i32 %24, i32 %25)
+  %27 = extractvalue { i32, i1 } %26, 0
+  %28 = extractvalue { i32, i1 } %26, 1
+  br i1 %28, label %abort.RA014, label %checked5
+
+abort.RA014:                                      ; preds = %checked3
+  call void @"topiq$abort"(ptr @abort.message.6, i32 64)
+  unreachable
+
+checked5:                                         ; preds = %checked3
+  ret i32 %27
+}
+
+; Function Attrs: nocallback nocreateundeforpoison nofree nosync nounwind speculatable willreturn memory(none)
+declare { i32, i1 } @llvm.smul.with.overflow.i32(i32, i32) #2
+
+; Function Attrs: nocallback nocreateundeforpoison nofree nosync nounwind speculatable willreturn memory(none)
+declare { i32, i1 } @llvm.sadd.with.overflow.i32(i32, i32) #2
+
+; Function Attrs: nocallback nofree nounwind willreturn memory(argmem: readwrite)
+declare void @llvm.memcpy.p0.p0.i64(ptr noalias writeonly captures(none), ptr noalias readonly captures(none), i64, i1 immarg) #3
+
+define internal void @"topiq$print"(i32 %0, ptr %1, i64 %2) {
+entry:
+  %buf = alloca [256 x i8], align 1
+  %i = alloca i64, align 8
+  %used = alloca i64, align 8
+  store i64 0, ptr %i, align 8
+  store i64 0, ptr %used, align 8
+  br label %test
+
+test:                                             ; preds = %next, %entry
+  %3 = load i64, ptr %i, align 8
+  %4 = icmp ult i64 %3, %2
+  br i1 %4, label %char, label %finish
+
+char:                                             ; preds = %test
+  %5 = load i64, ptr %used, align 8
+  %6 = icmp ugt i64 %5, 252
+  br i1 %6, label %flush, label %encode
+
+flush:                                            ; preds = %char
+  %7 = trunc i64 %5 to i32
+  %8 = call i32 @_write(i32 %0, ptr %buf, i32 %7)
+  store i64 0, ptr %used, align 8
+  br label %encode
+
+encode:                                           ; preds = %flush, %char
+  %9 = load i64, ptr %i, align 8
+  %10 = getelementptr inbounds i32, ptr %1, i64 %9
+  %c = load i32, ptr %10, align 4
+  %ascii = icmp ult i32 %c, 128
+  br i1 %ascii, label %one, label %not.one
+
+one:                                              ; preds = %encode
+  %11 = load i64, ptr %used, align 8
+  %12 = add i64 %11, 0
+  %13 = getelementptr inbounds i8, ptr %buf, i64 %12
+  %14 = trunc i32 %c to i8
+  store i8 %14, ptr %13, align 1
+  %15 = add i64 %11, 1
+  store i64 %15, ptr %used, align 8
+  br label %next
+
+not.one:                                          ; preds = %encode
+  %two.bytes = icmp ult i32 %c, 2048
+  br i1 %two.bytes, label %two, label %not.two
+
+two:                                              ; preds = %not.one
+  %16 = lshr i32 %c, 6
+  %17 = or i32 %16, 192
+  %18 = lshr i32 %c, 0
+  %19 = and i32 %18, 63
+  %20 = or i32 %19, 128
+  %21 = load i64, ptr %used, align 8
+  %22 = add i64 %21, 0
+  %23 = getelementptr inbounds i8, ptr %buf, i64 %22
+  %24 = trunc i32 %17 to i8
+  store i8 %24, ptr %23, align 1
+  %25 = add i64 %21, 1
+  %26 = getelementptr inbounds i8, ptr %buf, i64 %25
+  %27 = trunc i32 %20 to i8
+  store i8 %27, ptr %26, align 1
+  %28 = add i64 %21, 2
+  store i64 %28, ptr %used, align 8
+  br label %next
+
+not.two:                                          ; preds = %not.one
+  %three.bytes = icmp ult i32 %c, 65536
+  br i1 %three.bytes, label %three, label %four
+
+three:                                            ; preds = %not.two
+  %29 = lshr i32 %c, 12
+  %30 = or i32 %29, 224
+  %31 = lshr i32 %c, 6
+  %32 = and i32 %31, 63
+  %33 = or i32 %32, 128
+  %34 = lshr i32 %c, 0
+  %35 = and i32 %34, 63
+  %36 = or i32 %35, 128
+  %37 = load i64, ptr %used, align 8
+  %38 = add i64 %37, 0
+  %39 = getelementptr inbounds i8, ptr %buf, i64 %38
+  %40 = trunc i32 %30 to i8
+  store i8 %40, ptr %39, align 1
+  %41 = add i64 %37, 1
+  %42 = getelementptr inbounds i8, ptr %buf, i64 %41
+  %43 = trunc i32 %33 to i8
+  store i8 %43, ptr %42, align 1
+  %44 = add i64 %37, 2
+  %45 = getelementptr inbounds i8, ptr %buf, i64 %44
+  %46 = trunc i32 %36 to i8
+  store i8 %46, ptr %45, align 1
+  %47 = add i64 %37, 3
+  store i64 %47, ptr %used, align 8
+  br label %next
+
+four:                                             ; preds = %not.two
+  %48 = lshr i32 %c, 18
+  %49 = or i32 %48, 240
+  %50 = lshr i32 %c, 12
+  %51 = and i32 %50, 63
+  %52 = or i32 %51, 128
+  %53 = lshr i32 %c, 6
+  %54 = and i32 %53, 63
+  %55 = or i32 %54, 128
+  %56 = lshr i32 %c, 0
+  %57 = and i32 %56, 63
+  %58 = or i32 %57, 128
+  %59 = load i64, ptr %used, align 8
+  %60 = add i64 %59, 0
+  %61 = getelementptr inbounds i8, ptr %buf, i64 %60
+  %62 = trunc i32 %49 to i8
+  store i8 %62, ptr %61, align 1
+  %63 = add i64 %59, 1
+  %64 = getelementptr inbounds i8, ptr %buf, i64 %63
+  %65 = trunc i32 %52 to i8
+  store i8 %65, ptr %64, align 1
+  %66 = add i64 %59, 2
+  %67 = getelementptr inbounds i8, ptr %buf, i64 %66
+  %68 = trunc i32 %55 to i8
+  store i8 %68, ptr %67, align 1
+  %69 = add i64 %59, 3
+  %70 = getelementptr inbounds i8, ptr %buf, i64 %69
+  %71 = trunc i32 %58 to i8
+  store i8 %71, ptr %70, align 1
+  %72 = add i64 %59, 4
+  store i64 %72, ptr %used, align 8
+  br label %next
+
+next:                                             ; preds = %four, %three, %two, %one
+  %73 = load i64, ptr %i, align 8
+  %74 = add i64 %73, 1
+  store i64 %74, ptr %i, align 8
+  br label %test
+
+finish:                                           ; preds = %test
+  %75 = load i64, ptr %used, align 8
+  %76 = icmp ne i64 %75, 0
+  br i1 %76, label %last, label %done
+
+last:                                             ; preds = %finish
+  %77 = trunc i64 %75 to i32
+  %78 = call i32 @_write(i32 %0, ptr %buf, i32 %77)
+  br label %done
+
+done:                                             ; preds = %last, %finish
+  ret void
+}
+
+define i32 @main(i32 %0, ptr %1) {
+entry:
+  %2 = call i32 @_setmode(i32 1, i32 32768)
+  %3 = call i32 @_setmode(i32 2, i32 32768)
+  call void @"topiq$$startup"()
+  %status = call i32 @"topiq$aggregates$main"()
+  ret i32 %status
+}
+
+declare i32 @_setmode(i32, i32)
+
+declare void @"topiq$$startup"()
+
+attributes #0 = { noreturn }
+attributes #1 = { cold noinline noreturn nounwind }
+attributes #2 = { nocallback nocreateundeforpoison nofree nosync nounwind speculatable willreturn memory(none) }
+attributes #3 = { nocallback nofree nounwind willreturn memory(argmem: readwrite) }
+
+!llvm.linker.options = !{!0, !1}
+
+!0 = !{!"/ALTERNATENAME:topiq$ti$aggregates$3a$3aShape=topiq$$ti$blank"}
+!1 = !{!"/ALTERNATENAME:topiq$ti$aggregates$3a$3aPoint=topiq$$ti$blank"}

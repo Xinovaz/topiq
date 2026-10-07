@@ -1,0 +1,87 @@
+// expect: exit 0
+// stdout: 21 / 2 none / 60 7 / 12 none
+// A prefix hierarchy without inheritance, generics bounded by introspection,
+// and calling a method found by name.
+
+#unit classical
+
+struct Shape  { kind: u8, area: f64 }
+struct Circle { kind: u8, area: f64, r: f64 }
+struct Rect   { kind: u8, area: f64, w: f64, h: f64 }
+
+fn total(xs: *[*Shape]) -> f64 {
+    let acc = 0.0;
+    for i in 0..xs.len() { acc = acc + xs[i].area; }
+    acc
+}
+
+fn widen(c: *Circle) -> *Shape { c }
+
+fn narrow(s: *Shape) -> f64? {
+    match s as *Circle { Some(c) => Some(c.r), None => None }
+}
+
+fn sum<T>(xs: *[T]) -> T where @has_method(T, "$add") && @has_method(T, "$copy") {
+    let acc = xs[0];
+    for i in 1..xs.len() { acc = acc + xs[i]; }
+    acc
+}
+
+struct Square { side: f64 }
+
+impl Square {
+    fn area(self: *Square) -> f64 { self.side * self.side }
+}
+
+fn same_text(a: *[char], b: *[char]) -> bool {
+    if a.len() != b.len() { return false; }
+    for i in 0..a.len() { if a[i] != b[i] { return false; } }
+    true
+}
+
+fn call_area(p: *any) -> f64? {
+    let ti = @typeinfo_of(p);
+    for m in ti.methods {
+        if same_text(m.name, "area") {
+            return Some(invoke::<fn(*any) -> f64>(m.addr, p));
+        }
+    }
+    None
+}
+
+fn show(n: i64) {
+    if n >= 10 { show(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+fn show_opt(x: f64?) {
+    match x { Some(v) => show(v as i64), None => print("none") }
+}
+
+fn main() -> i32 {
+    let c = Circle { kind: 1, area: 12.0, r: 2.0 };
+    let r = Rect { kind: 2, area: 6.0, w: 2.0, h: 3.0 };
+    let s = Shape { kind: 0, area: 3.0 };
+    let xs: [*Shape; 3] = [widen(&c), &r, &s];
+    show(total(&xs) as i64);
+    print(" / ");
+    show_opt(narrow(xs[0]));
+    print(" ");
+    show_opt(narrow(xs[1]));
+    print(" / ");
+
+    let ns = [10, 20, 30];
+    show(sum(&ns));
+    print(" ");
+    let fs = [1.5, 2.5, 3.0];
+    show(sum(&fs) as i64);
+    print(" / ");
+
+    let q = Square { side: 3.5 };
+    show(call_area(&q).unwrap_or(0.0) as i64);
+    print(" ");
+    show_opt(call_area(&c));
+    print("\n");
+    0
+}

@@ -1,0 +1,423 @@
+//! The `algo` library: entanglement, phase kickback, and the standard
+//! quantum algorithms.
+//!
+//! Each operator is generic in the widths of its registers where the
+//! algorithm is, and takes the operators it is built around, such as an
+//! oracle, as operator-typed parameters. An algorithm that ends in
+//! measurement returns what it measured; one that does not leaves its
+//! registers to the caller, so that it can be composed, controlled or undone.
+//!
+//! The unit's conductor is 16: a quantum Fourier transform rotates by
+//! 2π/2^k, and the sixteenth of a turn is the finest rotation a conforming
+//! conductor holds. So `qft` is exact on up to four qubits and is the
+//! approximate transform beyond, leaving out every rotation finer than that.
+#unit quantum
+#pragma conductor(16)
+import gates;
+
+///////////////////
+//
+// Entanglement:
+//   The Bell states, the GHZ and W states, and measurement in the Bell
+//   basis.
+//
+///////////////////
+
+/// Φ+ = (|00> + |11>)/√2 on `a` and `b`, from |00>.
+fn bell(a: *qubit, b: *qubit) {
+    h(a);
+    cx(a, b);
+}
+
+/// One of the four Bell states on `a` and `b`, from |00>: Φ+, Ψ+, Φ- and Ψ-
+/// for `(z, x)` of (false, false), (false, true), (true, false) and
+/// (true, true). `x` says whether the two qubits disagree, and `z` whether
+/// the two branches differ in sign.
+fn bell_basis(z_bit: bool, x_bit: bool, a: *qubit, b: *qubit) {
+    if x_bit { x(b); }
+    bell(a, b);
+    if z_bit { z(a); }
+}
+
+/// `bell` undone: the Bell state `bell_basis(z, x)` becomes |z x>.
+fn unbell(a: *qubit, b: *qubit) {
+    cx(a, b);
+    h(a);
+}
+
+/// Which Bell state `r` holds, as the `(z, x)` `bell_basis` makes it from.
+fn bell_measure(r: [qubit; 2]) -> (bool, bool) {
+    unbell(&r[0], &r[1]);
+    let m = measure r;
+    (m[0], m[1])
+}
+
+/// (|0…0> + |1…1>)/√2 on `r`, from |0…0>.
+fn ghz<N: const usize>(r: *[qubit; N]) {
+    h(&r[0]);
+    for i in 1..N { cx(&r[i - 1], &r[i]); }
+}
+
+/// The W state on `r`, from |0…0>: the equal superposition of the `N` basis
+/// states with one qubit |1>. Its amplitudes are 1/√N, which the unit's field
+/// holds when `N` is a power of two, and only then; any other width aborts
+/// the circuit's generation.
+///
+/// The one |1> starts on the first qubit and is split in halves, level by
+/// level: where it is on the first qubit of a block, half of it moves to the
+/// first qubit of the block's second half.
+fn w_state<N: const usize>(r: *[qubit; N]) {
+    if N == 0 || (N & (N - 1)) != 0 {
+        panic("a W state's amplitudes are 1/√N, exact here only for N a power of two");
+    }
+    x(&r[0]);
+    let block = N;
+    for _ in 0..__log2(N) {
+        let half = block / 2;
+        for start in 0..N / block {
+            let s = start * block;
+            if r[s] { h(&r[s + half]); }
+            cx(&r[s + half], &r[s]);
+        }
+        block = half;
+    }
+}
+
+/// The base-2 logarithm of a power of two.
+fn __log2(n: usize) -> usize {
+    let k: usize = 0;
+    while (1usize << k) < n { k++; }
+    k
+}
+
+///////////////////
+//
+// Phase kickback:
+//   An operator that flips a qubit in |-> multiplies it by -1, and when the
+//   flip is controlled the -1 lands on the controls. So a bit oracle,
+//   |x>|y> to |x>|y xor f(x)>, given an ancilla in |-> acts on `x` as the
+//   phase oracle (-1)^f(x), and the ancilla comes back as it went in.
+//
+///////////////////
+
+/// `f` applied to `c` and an ancilla in |->: `c` gains the phase `f` writes,
+/// and the ancilla is given back. With `f` the controlled flip `cx`, this is
+/// `z` on `c`.
+fn kickback(f: fn(*qubit, *qubit), c: *qubit) {
+    aux let a: qubit;
+    x(&a);
+    h(&a);
+    f(c, &a);
+}
+
+/// The phase oracle of the bit oracle `f`: each basis state |x> of `r`
+/// multiplied by (-1)^f(x).
+fn phase_oracle<N: const usize>(f: fn(*[qubit; N], *qubit), r: *[qubit; N]) {
+    aux let a: qubit;
+    x(&a);
+    h(&a);
+    f(r, &a);
+}
+
+/// `v` seen through `u`: `u`, then `v`, then `u` undone.
+fn conjugate<N: const usize>(u: fn(*[qubit; N]), v: fn(*[qubit; N]), r: *[qubit; N]) {
+    u(r);
+    v(r);
+    adjoint(u)(r);
+}
+
+///////////////////
+//
+// Oracle algorithms:
+//   Deutsch's algorithm and its relatives, which learn a property of an
+//   oracle from one query in superposition.
+//
+///////////////////
+
+/// What Deutsch's algorithm decides of an oracle: whether it gives one value
+/// on every input, or each value on half of them.
+enum Guess { Constant, Balanced }
+
+/// Deutsch's algorithm, for a one-bit oracle such as `gates::ORACLE_Z`.
+[entry]
+fn deutsch(oracle: fn(*qubit, *qubit)) -> Guess {
+    let q: [qubit; 1];
+    h(&q[0]);
+    kickback(oracle, &q[0]);
+    h(&q[0]);
+    let m = measure q;
+    if m[0] { Guess::Balanced } else { Guess::Constant }
+}
+
+/// The Deutsch–Jozsa algorithm, for an oracle on `N` bits promised to be
+/// constant or balanced: it is constant exactly when every bit reads 0.
+fn deutsch_jozsa<N: const usize>(oracle: fn(*[qubit; N], *qubit)) -> Guess {
+    let q: [qubit; N];
+    hadamard_all(&q);
+    phase_oracle(oracle, &q);
+    hadamard_all(&q);
+    let m = measure q;
+    let any = false;
+    for i in 0..N { any = any | m[i]; }
+    if any { Guess::Balanced } else { Guess::Constant }
+}
+
+/// The Bernstein–Vazirani algorithm: the string `s` of an oracle computing
+/// the parity of `x & s`, from one query.
+fn bernstein_vazirani<N: const usize>(oracle: fn(*[qubit; N], *qubit)) -> [bool; N] {
+    let q: [qubit; N];
+    hadamard_all(&q);
+    phase_oracle(oracle, &q);
+    hadamard_all(&q);
+    measure q
+}
+
+/// One run of Simon's algorithm, for an oracle writing f(x) into its second
+/// register where f(x) = f(y) exactly when y is x or x ^ s: a string `y`
+/// with `y · s` even. About `N` runs give the equations that fix `s`, which
+/// `la::gf2_kernel` solves.
+fn simon<N: const usize>(oracle: fn(*[qubit; N], *[qubit; N])) -> [bool; N] {
+    let q: [qubit; N];
+    let out: [qubit; N];
+    hadamard_all(&q);
+    oracle(&q, &out);
+    hadamard_all(&q);
+    let m = measure q;
+    forget out;
+    m
+}
+
+///////////////////
+//
+// Amplitude amplification:
+//   Grover's search and its generalisation. Each round reflects about the
+//   states the oracle marks and then about the state the search started
+//   from, which turns the state towards the marked ones.
+//
+///////////////////
+
+/// 2|0…0><0…0| - I: every basis state of `r` but |0…0> negated.
+fn reflect_zero<N: const usize>(r: *[qubit; N]) {
+    for i in 0..N { x(&r[i]); }
+    __flip_ones(r, 0);
+    for i in 0..N { x(&r[i]); }
+    gphase(phase::<8>::of(4));
+}
+
+/// The phase of |1…1> flipped, from qubit `i` on: each qubit before the last
+/// a quantum branch inside the last, and `z` on the last.
+fn __flip_ones<N: const usize>(r: *[qubit; N], i: usize) {
+    if i + 1 == N {
+        z(&r[i]);
+    } else {
+        if r[i] { __flip_ones(r, i + 1); }
+    }
+}
+
+/// Grover's diffusion operator, 2|s><s| - I, with |s> the uniform
+/// superposition of every basis state of `r`.
+fn diffuse<N: const usize>(r: *[qubit; N]) {
+    hadamard_all(r);
+    reflect_zero(r);
+    hadamard_all(r);
+}
+
+/// One round of Grover's search: the phase oracle `oracle`, which negates the
+/// marked basis states, then the diffusion.
+fn grover_iterate<N: const usize>(oracle: fn(*[qubit; N]), r: *[qubit; N]) {
+    oracle(r);
+    diffuse(r);
+}
+
+/// Grover's search over the `N`-bit strings: `rounds` rounds from the uniform
+/// superposition, then measured. `grover_rounds` gives the number of rounds
+/// most likely to find a marked string.
+fn grover<N: const usize>(oracle: fn(*[qubit; N]), rounds: u32) -> [bool; N] {
+    let r = uniform::<N>();
+    for _ in 0..rounds { grover_iterate(oracle, &r); }
+    measure r
+}
+
+/// The number of rounds of Grover's search over `n` qubits, `marked` of whose
+/// basis states are marked, after which a marked one is most likely seen.
+///
+/// Each round turns the state by 2θ, where cos 2θ = 1 - 2·marked/2^n, and
+/// after k rounds a marked state is seen with probability
+/// (1 - cos((2k + 1)·2θ))/2. The cosines of the multiples of 2θ follow from
+/// cos 2θ alone, each from the two before, so no root or angle is taken: the
+/// answer is the k at which the cosine is first at its lowest.
+fn grover_rounds(n: u32, marked: u64) -> u32 {
+    let total = (1u64 << n) as f64;
+    let m = marked as f64;
+    if marked == 0 || m >= total {
+        return 0;
+    }
+    let c = 1.0 - 2.0 * m / total;
+    // the cosines of (j - 1)·2θ and j·2θ, from j = 1
+    let before = 1.0;
+    let now = c;
+    let k: u32 = 0;
+    loop {
+        let next = 2.0 * c * now - before;
+        let after = 2.0 * c * next - now;
+        if after >= now {
+            return k;
+        }
+        before = next;
+        now = after;
+        k++;
+    }
+}
+
+/// Amplitude amplification: `prepare` applied to `r`, then `rounds` rounds of
+/// the phase oracle `oracle` and the reflection about the state `prepare`
+/// makes. With `prepare` making the uniform superposition this is Grover's
+/// search.
+fn amplify<N: const usize>(prepare: fn(*[qubit; N]), oracle: fn(*[qubit; N]), r: *[qubit; N], rounds: u32) {
+    prepare(r);
+    for _ in 0..rounds {
+        oracle(r);
+        adjoint(prepare)(r);
+        reflect_zero(r);
+        prepare(r);
+    }
+}
+
+///////////////////
+//
+// Fourier transform and phase estimation:
+//   The quantum Fourier transform takes |j> to the sum over k of
+//   e^(2πi·jk/2^N)|k>/√(2^N), the first qubit the most significant.
+//
+///////////////////
+
+/// The quantum Fourier transform on `r`. Qubits `d` apart are joined by a
+/// controlled rotation of 2π/2^(d + 1); those finer than a sixteenth of a
+/// turn, which only `N` above 4 needs, are left out.
+fn qft<N: const usize>(r: *[qubit; N]) {
+    for i in 0..N {
+        h(&r[i]);
+        for j in i + 1..N {
+            let k = j - i + 1;
+            if k <= 4 {
+                cphase(phase::<16>::of((16 >> k) as i64), &r[j], &r[i]);
+            }
+        }
+    }
+    for k in 0..N / 2 { swap(&r[k], &r[N - 1 - k]); }
+}
+
+/// `qft` undone.
+fn iqft<N: const usize>(r: *[qubit; N]) {
+    adjoint(qft::<N>)(r);
+}
+
+/// Phase estimation: with `eigen` an eigenstate of `u` with eigenvalue
+/// e^(2πiθ), leaves `c`, from |0…0>, holding θ to `N` bits after the binary
+/// point, exactly when θ has no more. `u` is applied 2^j times under the
+/// control of the `j`-th qubit from the least significant end, which kicks
+/// the phase 2^j·θ back onto it.
+fn phase_estimate<N: const usize, M: const usize>(u: fn(*[qubit; M]), c: *[qubit; N], eigen: *[qubit; M]) {
+    hadamard_all(c);
+    for j in 0..N {
+        if c[N - 1 - j] {
+            for _ in 0..(1u64 << j) { u(eigen); }
+        }
+    }
+    iqft(c);
+}
+
+/// `phase_estimate` on fresh qubits, measured: θ's first `N` bits.
+fn estimate_phase<N: const usize, M: const usize>(u: fn(*[qubit; M]), eigen: *[qubit; M]) -> [bool; N] {
+    let c: [qubit; N];
+    phase_estimate(u, &c, eigen);
+    measure c
+}
+
+/// `a + b` modulo 2^N, by adding `b`'s bits to the phases of `a`'s Fourier
+/// transform. It is exact only while the transform is, for `N` up to 4, and
+/// any wider `quint` aborts the circuit's generation: an approximate sum
+/// would be a wrong one. `wrapping_add` adds exactly at every width.
+fn draper_add<N: const usize>(a: quint<N>, b: *quint<N>) -> quint<N> {
+    if N > 4 {
+        panic("draper_add is exact for quints of up to 4 bits; wrapping_add adds at every width");
+    }
+    qft(&a.bits);
+    // the transform's qubit `i` turns by 2π·b/2^(i + 1), and `b`'s bit `j`,
+    // worth 2^(N - 1 - j), by 2π/2^(i + j + 2 - N) of that
+    for i in 0..N {
+        for j in 0..N {
+            if i + j + 2 > N {
+                let e = i + j + 2 - N;
+                cphase(phase::<16>::of((16 >> e) as i64), &b.bits[j], &a.bits[i]);
+            }
+        }
+    }
+    iqft(&a.bits);
+    a
+}
+
+///////////////////
+//
+// Protocols:
+//   Teleportation, superdense coding, and the swap and Hadamard tests,
+//   which read an inner product from the statistics of one bit.
+//
+///////////////////
+
+/// Teleportation: the state of `src` moved onto a fresh qubit, which is
+/// returned, using a Bell pair and two measured bits. `src` is measured.
+fn teleport(src: [qubit; 1]) -> [qubit; 1] {
+    let a: [qubit; 1];
+    let dst: [qubit; 1];
+    bell(&a[0], &dst[0]);
+    cx(&src[0], &a[0]);
+    h(&src[0]);
+    let ms = measure src;
+    let ma = measure a;
+    if ma[0] { x(&dst[0]); }
+    if ms[0] { z(&dst[0]); }
+    dst
+}
+
+/// Superdense coding's first half: the two bits written into `a`, one half of
+/// the Bell pair `bell` makes, which the other half's holder reads with
+/// `superdense_decode`.
+fn superdense_encode(b0: bool, b1: bool, a: *qubit) {
+    if b1 { x(a); }
+    if b0 { z(a); }
+}
+
+/// The two bits `superdense_encode` wrote into the pair `r`.
+fn superdense_decode(r: [qubit; 2]) -> (bool, bool) {
+    bell_measure(r)
+}
+
+/// The swap test: `true` with probability (1 - |<a|b>|²)/2, so never when `a`
+/// and `b` hold the same state and half the time when they are orthogonal.
+/// The two registers are left entangled.
+fn swap_test<N: const usize>(a: *[qubit; N], b: *[qubit; N]) -> bool {
+    let t: [qubit; 1];
+    h(&t[0]);
+    for i in 0..N {
+        if t[0] { swap(&a[i], &b[i]); }
+    }
+    h(&t[0]);
+    let m = measure t;
+    m[0]
+}
+
+/// The Hadamard test: `false` with probability (1 + Re <r|u|r>)/2, or, when
+/// `imaginary`, (1 + Im <r|u|r>)/2, so that the expectation of a unitary is
+/// read from the statistics of one bit. An ancilla in |+> controls `u` on
+/// `r`, is turned by S† when `imaginary`, and is measured in the basis |+>,
+/// |->. `r` is left entangled with what was measured.
+fn hadamard_test<N: const usize>(u: fn(*[qubit; N]), r: *[qubit; N], imaginary: bool) -> bool {
+    let t: [qubit; 1];
+    h(&t[0]);
+    if t[0] { u(r); }
+    if imaginary { sdag(&t[0]); }
+    h(&t[0]);
+    let m = measure t;
+    m[0]
+}

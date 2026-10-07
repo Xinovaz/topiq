@@ -1,0 +1,34 @@
+// expect: exit 0
+// Operators the library's types define, on states and type tables, and
+// `==` on enumerations whose variants carry nothing.
+#unit classical
+import quon;
+
+struct Point { x: i32 }
+
+fn state(text: *const [char]) -> quon::State {
+    quon::parse(text).unwrap()
+}
+
+fn main() -> i32 {
+    // states add, subtract, negate and multiply as vectors and tensors
+    let zero = state("|0>");
+    let one = state("|1>");
+    let plus = zero + one;
+    if plus != state("|0> + |1>") { return 1; }
+    if plus - one != zero { return 2; }
+    if -zero != state("-|0>") { return 3; }
+    if zero ** one != state("|01>") { return 4; }
+    if plus - plus != zero.scale(&cyclo::<48>::from(0)) { return 5; }
+    if zero == one || zero == zero ** zero { return 6; }
+
+    // two tables describe one type, whichever reference reaches them
+    let a = @typeinfo(Point);
+    let b = @typeinfo(Point);
+    if !(*a == *b) || *a == *@typeinfo(i32) { return 7; }
+
+    // an enumeration whose variants carry nothing compares by variant
+    if str::cmp("a", "b") != Ord::Lt || str::cmp("b", "b") == Ord::Gt { return 8; }
+    if a.kind != TypeKind::Struct || TypeKind::Enum == TypeKind::Tuple { return 9; }
+    0
+}

@@ -1,0 +1,51 @@
+// expect: exit 0
+// stdout: dot 11, sum 7, manhattan 12, calls 42
+#unit classical
+import vec;
+import extra;
+
+fn print_small(n: i64) {
+    if n >= 10 { print_small(n / 10); }
+    let c = ["0123456789"[(n % 10) as usize]];
+    print(&c);
+}
+
+struct Adder { n: i64 }
+
+impl Adder {
+    fn $call(self: *Adder, x: i64) -> i64 { self.n + x }
+}
+
+fn main() -> i32 {
+    let a = vec::V2::new(1, 2);
+    let b = vec::V2 { x: 3, y: 4 };
+    print("dot ");
+    print_small(a.dot(&b));
+
+    // Operators are the operand type's operator methods.
+    let c = a + b;
+    if c != vec::V2::new(4, 6) { return 1; }
+    c += vec::V2::new(1, 1);
+    if c[0] != 5 || c[1] != 7 { return 2; }
+    c.scale(1);
+    // `$neg` takes its operand by value, so `c` is moved here.
+    let d = -c;
+    if d.x != -5 { return 3; }
+
+    print(", sum ");
+    print_small(vec::V2::new(3, 4).sum());
+    print(", manhattan ");
+    print_small(d.manhattan());
+
+    // A generic type's methods take its arguments from the receiver.
+    let s = vec::Stack::holding(10i64);
+    s.push(32);
+    if s.top() != 32 { return 4; }
+    if !s.map_top(false, true) { return 5; }
+
+    let add = Adder { n: s.top() };
+    print(", calls ");
+    print_small(add(10));
+    print("\n");
+    0
+}

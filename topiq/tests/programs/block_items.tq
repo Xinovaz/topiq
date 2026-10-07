@@ -1,0 +1,40 @@
+// expect: exit 0
+// Functions, structures and methods declared inside blocks: in scope
+// throughout their block and the blocks within it, calling one another in
+// any order, and unseen outside, where another block may use the same names.
+#unit classical
+
+struct Point { x: i64 }
+
+fn first() -> i64 {
+    fn helper(n: i64) -> i64 { if n == 0 { 0 } else { other(n - 1) + 1 } }
+    fn other(n: i64) -> i64 { if n == 0 { 0 } else { helper(n - 1) + 1 } }
+    helper(5)
+}
+
+fn second() -> i64 {
+    struct Point { a: i64, b: i64 }
+    impl Point {
+        fn sum(self: *Point) -> i64 { self.a + self.b }
+    }
+    fn helper(p: Point) -> i64 { p.sum() * 10 }
+    let p = Point { a: 1, b: 2 };
+    helper(p)
+}
+
+fn third() -> i64 {
+    let outer = Point { x: 7 };
+    if outer.x > 0 {
+        fn deeper(k: i64) -> i64 {
+            fn deepest(j: i64) -> i64 { j * 2 }
+            deepest(k) + 1
+        }
+        deeper(outer.x)
+    } else {
+        0
+    }
+}
+
+fn main() -> i32 {
+    if first() == 5 && second() == 30 && third() == 15 { 0 } else { 1 }
+}

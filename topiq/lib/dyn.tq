@@ -1,0 +1,152 @@
+//! The `dyn` library: working with values whose type is only known when the
+//! program runs.
+//!
+//! Everything here is ordinary code over `TypeInfo` tables. A `dyn` holds a
+//! value together with its type's table, and every check below compares
+//! tables with `__same_type`: by address, and across a loaded module by
+//! qualified name. Nothing here can make a value of the wrong type: each
+//! operation checks the tables first and fails, rather than trusting its
+//! arguments.
+
+#unit classical
+
+/// Why an operation on a dynamic value could not be done.
+enum Error {
+    /// The value's type has no field of the name given.
+    NoSuchField,
+    /// The value's type has no method of the name given.
+    NoSuchMethod,
+    /// The types given are not the ones the field or method takes, or the
+    /// method cannot be called with `dyn` arguments.
+    SignatureMismatch,
+    /// No value of the type can be made from nothing.
+    NotConstructible,
+    /// A document did not fit the type it was read as.
+    Schema(tcon::Error),
+}
+
+/// `v`, moved into a dynamic value.
+fn of<T>(v: T) -> dyn {
+    __dyn_of(v)
+}
+
+/// The table of the type of the value `d` holds.
+fn type_of(d: *const dyn) -> *const TypeInfo {
+    @typeinfo_of(__dyn_view(d))
+}
+
+/// Whether `d` holds a `T`.
+fn is<T>(d: *const dyn) -> bool {
+    __same_type(type_of(d), @typeinfo(T))
+}
+
+/// The `T` that `d` holds, or `d` itself back when it holds something else.
+fn get<T>(d: dyn) -> Result<T, dyn> {
+    if __same_type(type_of(&d), @typeinfo(T)) { Ok(__dyn_take(d)) } else { Err(d) }
+}
+
+/// A reference to the `T` that `d` holds.
+fn borrow<T>(d: *dyn) -> Opt<*T> {
+    __dyn_view(d) as *T
+}
+
+/// A reference to the field called `name` of the value `d` holds.
+fn field(d: *dyn, name: *const [char]) -> Opt<*any> {
+    let p = __dyn_view(d);
+    for f in type_of(d).fields {
+        if str::eq(f.name, name) {
+            return Some(__field_at(p, f.offset, f.ty));
+        }
+    }
+    None
+}
+
+/// Replaces the field called `name` of the value `d` holds with the value `v`
+/// holds, which must be of the field's type. The field's old value is
+/// destroyed.
+fn set_field(d: *dyn, name: *const [char], v: dyn) -> Result<(), Error> {
+    let p = __dyn_view(d);
+    for f in type_of(d).fields {
+        if str::eq(f.name, name) {
+            if !__same_type(type_of(&v), f.ty) {
+                return Err(Error::SignatureMismatch);
+            }
+            __dyn_store(__field_at(p, f.offset, f.ty), v);
+            return Ok(());
+        }
+    }
+    Err(Error::NoSuchField)
+}
+
+/// Calls the method called `method` on the value `d` holds, with the values
+/// `args` hold as its arguments, after the receiver. Each argument's type is
+/// checked against the method's signature before the call, and the result
+/// comes back as a `dyn`, holding `()` for a method that returns nothing.
+fn call(d: *dyn, method: *const [char], args: *[dyn]) -> Result<dyn, Error> {
+    for m in type_of(d).methods {
+        if str::eq(m.name, method) {
+            // the signature lists the receiver, then the parameters, then
+            // the result
+            let params = m.sig.fields;
+            if params.len() != args.len() + 2 {
+                return Err(Error::SignatureMismatch);
+            }
+            for i in 0..args.len() {
+                if !__same_type(type_of(&args[i]), params[i + 1].ty) {
+                    return Err(Error::SignatureMismatch);
+                }
+            }
+            if __is_null(m.call) {
+                return Err(Error::SignatureMismatch);
+            }
+            return Ok(__dyn_call(m.call, __dyn_view(d), args));
+        }
+    }
+    Err(Error::NoSuchMethod)
+}
+
+/// A value of the type `ti` describes, all of whose bytes are zero, for a
+/// type where that is a value: numbers, `bool`, `char`, empty growable
+/// arrays, and structures, tuples and enumerations built only from those, an
+/// enumeration being its first variant. A reference, a function or a closure
+/// is never null, so a type holding one cannot be made this way.
+fn make(ti: *const TypeInfo) -> Result<dyn, Error> {
+    if zero_is_a_value(ti) { Ok(__dyn_make(ti)) } else { Err(Error::NotConstructible) }
+}
+
+/// The document tree `v` read as a value of the type `ti` describes, which
+/// need not be a type this program was translated with.
+fn bind(v: *const tcon::Value, ti: *const TypeInfo) -> Result<dyn, Error> {
+    let d = __dyn_make(ti);
+    tcon::bind_into(v, __dyn_view(&d))?;
+    Ok(d)
+}
+
+/// The value `d` holds.
+fn emit(d: *const dyn) -> string {
+    tcon::emit_any(__dyn_view(d))
+}
+
+static fn zero_is_a_value(ti: *const TypeInfo) -> bool {
+    if ti.quantum {
+        return false;
+    }
+    match ti.kind {
+        TypeKind::Scalar => true,
+        TypeKind::DynArray => true,
+        TypeKind::Void => true,
+        TypeKind::Struct => all_zero(ti.fields),
+        TypeKind::Tuple => all_zero(ti.fields),
+        TypeKind::Enum => ti.variants.len() > 0 && all_zero(ti.variants[0].fields),
+        _ => false,
+    }
+}
+
+static fn all_zero(fields: *const [FieldInfo]) -> bool {
+    for f in fields {
+        if !zero_is_a_value(f.ty) {
+            return false;
+        }
+    }
+    true
+}

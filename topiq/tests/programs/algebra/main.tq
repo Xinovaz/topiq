@@ -1,0 +1,77 @@
+// expect: exit 0
+// stdout: 0 1 0 10 rigid no:cyc yes NotUnitary 0 12 0 24 6 30 0000 0000 10
+// Circuits made from circuits, and their judgements, while a program runs.
+#unit classical
+import ops;
+import gates;
+import qpu;
+
+fn digit(b: bool) {
+    if b { print("1"); } else { print("0"); }
+}
+
+fn main() -> i32 {
+    let twice = circuit::then(ops::flip, ops::flip).unwrap();
+    digit(ops::there_and_back(twice));
+    print(" ");
+    digit(ops::there_and_back(circuit::repeat(ops::flip, 3)));
+    print(" ");
+    digit(ops::there_and_back(circuit::adjoint(ops::quarter).unwrap()));
+    print(" ");
+    let (a, b) = ops::under(circuit::controlled(ops::flip));
+    digit(a);
+    digit(b);
+    print(" ");
+    // The phase oracle Z twice is the identity, judged rigid by the cocycle
+    // law; once, it is not rigid, but cyc.
+    let zz = circuit::then(gates::ORACLE_Z, gates::ORACLE_Z).unwrap();
+    match judge::check(circuit::judgment(&zz), judge::ContractClass::Rigid) {
+        Ok(()) => print("rigid "),
+        Err(_) => print("not rigid "),
+    }
+    match judge::check(circuit::judgment(&gates::ORACLE_Z), judge::ContractClass::Rigid) {
+        Ok(()) => print("rigid "),
+        Err(r) => match r.class_derived {
+            judge::ContractClass::Cyc(_) => print("no:cyc "),
+            _ => print("no "),
+        },
+    }
+    let profile: [phase<48>] = [phase::<48>::of(0), phase::<48>::of(24)];
+    match judge::check(circuit::judgment(&gates::ORACLE_Z), judge::ContractClass::Cyc(profile)) {
+        Ok(()) => print("yes "),
+        Err(_) => print("no "),
+    }
+    match circuit::adjoint(ops::look) {
+        Ok(_) => print("an adjoint of an instrument "),
+        Err(e) => { print(&tcon::emit(&e)); print(" "); }
+    }
+    // Estimates, drawn by running a phase-estimation ladder.
+    let dev = qpu::connect("sim://exact").unwrap();
+    print(&tcon::emit(&dev.estimate_stat(ops::quarter, 0, 3).unwrap().index()));
+    print(" ");
+    print(&tcon::emit(&dev.estimate_stat(ops::quarter, 1, 3).unwrap().index()));
+    for p in &dev.estimate_sector(ops::phases, 4).unwrap() {
+        print(" ");
+        print(&tcon::emit(&p.index()));
+    }
+    print(" ");
+    // A loop of matrices, undone where the program runs and where the
+    // operator is generated: the qubit is |0> again every time.
+    let undone = circuit::then(ops::spin, circuit::adjoint(ops::spin).unwrap()).unwrap();
+    let back = circuit::then(undone, ops::peek).unwrap();
+    for n in 0..4 {
+        let r = dev.register(1);
+        digit(dev.run(back, r, n).unwrap());
+    }
+    print(" ");
+    for n in 0..4 {
+        digit(ops::round_trip(n));
+    }
+    print(" ");
+    // A gate written as outer products, and a matrix undone by its adjoint.
+    let (flipped, kept) = ops::kets();
+    digit(flipped);
+    digit(kept);
+    print("\n");
+    0
+}

@@ -1,0 +1,38 @@
+// expect: exit 0
+#unit classical
+
+// The same body, once as a constant function evaluated during translation
+// and once compiled: the two must agree on structures, arrays and `match`.
+
+struct Pair { a: i64, b: i64 }
+enum Step { Double, Add(i64) }
+
+fn score_c(n: constexpr i64) -> constexpr i64 {
+    let p = Pair { a: n, b: n * 2 };
+    let table = [3, 1, 4, 1, 5];
+    let s = if n % 2 == 0 { Step::Double } else { Step::Add(7) };
+    match s {
+        Step::Double => p.a * 2 + table[2],
+        Step::Add(k) => p.b + k + table[4],
+    }
+}
+
+fn score_r(n: i64) -> i64 {
+    let p = Pair { a: n, b: n * 2 };
+    let table = [3, 1, 4, 1, 5];
+    let s = if n % 2 == 0 { Step::Double } else { Step::Add(7) };
+    match s {
+        Step::Double => p.a * 2 + table[2],
+        Step::Add(k) => p.b + k + table[4],
+    }
+}
+
+let S4: const i64 = score_c(4);
+let S5: const i64 = score_c(5);
+
+fn main() -> i32 {
+    if S4 != score_r(4) { return 1; }
+    if S5 != score_r(5) { return 2; }
+    if S4 != 12 || S5 != 22 { return 3; }
+    0
+}

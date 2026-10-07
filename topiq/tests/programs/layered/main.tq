@@ -1,0 +1,13 @@
+// expect: abort RA06 at mid:17
+#unit classical
+import vectors;
+import mid;
+
+fn main() -> i32 {
+    // `mid` hands back a `vectors::Vec2`: the same type this unit names.
+    let a: vectors::Vec2 = mid::unit_x();
+    let s = mid::Segment { from: a, to: vectors::make(4, 4) };
+    if mid::length_sq(&s) != 25 { return 1; }
+    // Aborts inside `mid`, and the line says so.
+    mid::check(3)
+}

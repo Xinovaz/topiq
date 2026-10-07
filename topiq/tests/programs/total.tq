@@ -1,0 +1,37 @@
+// expect: exit 0
+// stdout: wrapped, clamped, checked, truncated
+#unit classical
+
+fn main() -> i32 {
+    if wrapping_add(250u8, 10u8) != 4 { return 1; }
+    if wrapping_sub(0u8, 1u8) != 255 { return 2; }
+    if wrapping_mul(-128i8, -1i8) != -128 { return 3; }
+    if wrapping_neg(-128i8) != -128 { return 4; }
+    if wrapping_shl(1u32, 33u32) != 2 { return 5; }
+    let (r, o) = overflowing_add(127i8, 1i8);
+    if r != -128 || !o { return 6; }
+    print("wrapped, ");
+
+    if saturating_add(250u8, 10u8) != 255 { return 7; }
+    if saturating_sub(-100i8, 100i8) != -128 { return 8; }
+    if saturating_mul(-100i8, 2i8) != -128 || saturating_mul(100i8, 2i8) != 127 { return 9; }
+    let big: u8 = saturating_as::<i64, u8>(1000);
+    let neg: u8 = saturating_as::<i64, u8>(-5);
+    let nan: i32 = saturating_as::<f64, i32>(0.0 / 0.0);
+    let inf: i32 = saturating_as::<f64, i32>(1.0 / 0.0);
+    if big != 255 || neg != 0 || nan != 0 || inf != 2147483647 { return 10; }
+    print("clamped, ");
+
+    if checked_add(200u8, 100u8).is_some() { return 11; }
+    if checked_div(7i32, 0i32).is_some() { return 12; }
+    if checked_div(-2147483648i32, -1i32).is_some() { return 13; }
+    if checked_rem(7i32, 3i32).unwrap() != 1 { return 14; }
+    if checked_sub(5i64, 3i64).expect("5 - 3 fits") != 2 { return 15; }
+    print("checked, ");
+
+    let low: u8 = truncate::<u32, u8>(0x1234);
+    let wide: i64 = truncate::<i8, i64>(-1i8);
+    if low != 0x34 || wide != -1 { return 16; }
+    print("truncated\n");
+    0
+}

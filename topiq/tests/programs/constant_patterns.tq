@@ -1,0 +1,42 @@
+// expect: exit 0
+// Constants of structures, enumerations and tuples used as patterns: each
+// matches exactly its value, field by field.
+#unit classical
+
+struct P { x: i32, y: i32 }
+enum Shape { Dot, Line(i32), Box { w: i32, h: i32 } }
+
+let ORIGIN: const P = P { x: 0, y: 0 };
+let UNIT_BOX: const Shape = Shape::Box { w: 1, h: 1 };
+let PAIR: const (i32, bool) = (3, true);
+
+fn where_is(p: P) -> i32 {
+    match p {
+        ORIGIN => 0,
+        P { x: 0 } => 1,
+        _ => 2,
+    }
+}
+
+fn size(s: Shape) -> i32 {
+    match s {
+        UNIT_BOX => 1,
+        Shape::Box { w, h } => w * h,
+        Shape::Line(n) => n,
+        Shape::Dot => 0,
+    }
+}
+
+fn pair(t: (i32, bool)) -> i32 {
+    match t {
+        PAIR => 10,
+        _ => 20,
+    }
+}
+
+fn main() -> i32 {
+    let a = where_is(P { x: 0, y: 0 }) + where_is(P { x: 0, y: 5 }) * 10 + where_is(P { x: 4, y: 0 }) * 100;
+    let b = size(Shape::Box { w: 1, h: 1 }) + size(Shape::Box { w: 2, h: 3 }) * 10;
+    let c = pair((3, true)) + pair((3, false));
+    if a == 210 && b == 61 && c == 30 { 0 } else { 1 }
+}

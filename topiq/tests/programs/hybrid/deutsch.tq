@@ -1,0 +1,19 @@
+// The quantum half of a hybrid program. A classical unit may use its types,
+// its constants and its entry operator; the rest is the quantum side's.
+#unit quantum
+import gates;
+
+enum Guess { Constant, Balanced }
+struct Register { q: [qubit; 2] }
+let TRIALS: const u32 = 3;
+let SCRATCH: u32 = 0;
+
+fn helper(q: *qubit) { h(q); }
+
+[entry]
+fn deutsch(bias: u32) -> Guess {
+    let q: [qubit; 1] = prep |0>;
+    h(&q[0]);
+    let bits = measure q;
+    if bits[0] { Guess::Balanced } else { Guess::Constant }
+}

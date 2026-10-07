@@ -1,0 +1,43 @@
+// expect: exit 0
+#unit classical
+
+fn sum(xs: *[i64]) -> i64 {
+    let total = 0;
+    for i in 0..xs.len() { total += xs[i]; }
+    total
+}
+
+// Sorts in place, through a mutable slice.
+fn sort(xs: *[i64]) {
+    let n = xs.len();
+    for i in 0..n {
+        for j in 0..n - 1 - i {
+            if xs[j] > xs[j + 1] {
+                let t = xs[j];
+                xs[j] = xs[j + 1];
+                xs[j + 1] = t;
+            }
+        }
+    }
+}
+
+fn main() -> i32 {
+    let a = [5, 3, 9, 1, 7];
+    sort(&a);
+    if a[0] != 1 || a[4] != 9 { return 1; }
+    if sum(&a) != 25 { return 2; }
+    let zeros = [0u8; 16];
+    if zeros.len() != 16 || zeros[15] != 0 { return 3; }
+    let grid = [[0i32; 3]; 3];
+    for i in 0..3 { grid[i][i] = 1; }
+    let trace = 0;
+    for i in 0..3 { for j in 0..3 { trace += grid[i][j]; } }
+    if trace != 3 { return 4; }
+    // An array of integers is copied, not shared.
+    let copy = a;
+    a[0] = 100;
+    if copy[0] != 1 || a[0] != 100 { return 5; }
+    let big = [7u32; 100];
+    if big[99] != 7 || big[0] != 7 { return 6; }
+    0
+}

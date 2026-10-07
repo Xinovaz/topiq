@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="tqc doc">
+<title>{% block title %}{% endblock %}</title>
+<link rel="stylesheet" href="{{ root }}static/style.css">
+<script defer src="{{ root }}search-index.js"></script>
+<script defer src="{{ root }}static/search.js"></script>
+</head>
+<body data-root="{{ root }}">
+<header class="bar">
+  <a class="project" href="{{ root }}index.html">{{ project }}</a>
+  <input id="search" type="search" placeholder="Search {{ project }}… (press /)" aria-label="Search the documentation" autocomplete="off" spellcheck="false">
+</header>
+<div class="frame">
+  <nav class="sidebar" aria-label="Contents">
+    {%- if sidebar %}
+    <h2 class="unit"><a href="{{ root }}{{ sidebar.href }}">{{ sidebar.unit }}</a></h2>
+    {%- for s in sidebar.sections %}
+    <h3><a href="{{ root }}{{ sidebar.href }}#{{ s.id }}">{{ s.title }}</a></h3>
+    <ul class="names">
+      {%- for e in s.entries %}
+      <li><a href="{{ root }}{{ e.href }}">{{ e.name }}</a></li>
+      {%- endfor %}
+    </ul>
+    {%- endfor %}
+    {%- endif %}
+    <h3>Units</h3>
+    <ul class="names">
+      {%- for u in units %}
+      <li><a href="{{ root }}{{ u.href }}">{{ u.name }}</a></li>
+      {%- endfor %}
+    </ul>
+  </nav>
+  <main>
+    <div id="content">
+{% block content %}{% endblock %}
+    </div>
+    <div id="results" hidden></div>
+    <footer>Written by <code>tqc doc</code>.</footer>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,134 @@
+---
+source: tests/snapshots.rs
+expression: "topiq::meta::encode::encode(out.metadata.as_ref().expect(\"analysis succeeded\"),\nsession.interner())"
+---
+Metadata {
+    version: "0.2",
+    edition: 2,
+    unit: "aggregates",
+    conductor: 8,
+    main: Valid,
+    init: false,
+    types: [
+        Adt {
+            origin: "aggregates",
+            name: "Point",
+            linkage: "program",
+            open: false,
+            opaque: false,
+            packed: false,
+            align: 0,
+            tag: "",
+            args: [],
+            kind: Struct {
+                fields: [
+                    Field {
+                        name: "x",
+                        ty: Int("i32"),
+                    },
+                    Field {
+                        name: "y",
+                        ty: Int("i32"),
+                    },
+                ],
+            },
+        },
+        Adt {
+            origin: "aggregates",
+            name: "Shape",
+            linkage: "program",
+            open: false,
+            opaque: false,
+            packed: false,
+            align: 0,
+            tag: "",
+            args: [],
+            kind: Enum {
+                variants: [
+                    Variant {
+                        name: "Empty",
+                        shape: Unit,
+                        fields: [],
+                    },
+                    Variant {
+                        name: "Circle",
+                        shape: Tuple,
+                        fields: [
+                            Field {
+                                name: "",
+                                ty: Int("i32"),
+                            },
+                        ],
+                    },
+                    Variant {
+                        name: "Rect",
+                        shape: Struct,
+                        fields: [
+                            Field {
+                                name: "corner",
+                                ty: Adt(0),
+                            },
+                            Field {
+                                name: "w",
+                                ty: Int("i32"),
+                            },
+                            Field {
+                                name: "h",
+                                ty: Int("i32"),
+                            },
+                        ],
+                    },
+                ],
+            },
+        },
+    ],
+    fns: [
+        Fn {
+            name: "area",
+            params: [Ref("write", Adt(1))],
+            ret: Int("i32"),
+            constant: false,
+            linkage: "program",
+            method: None,
+            entry: false,
+        },
+        Fn {
+            name: "grow",
+            params: [Ref("write", Adt(0)), Int("i32")],
+            ret: Void,
+            constant: false,
+            linkage: "program",
+            method: None,
+            entry: false,
+        },
+        Fn {
+            name: "main",
+            params: [],
+            ret: Int("i32"),
+            constant: false,
+            linkage: "program",
+            method: None,
+            entry: false,
+        },
+    ],
+    globals: [
+        Global {
+            name: "ORIGIN",
+            ty: Adt(0),
+            constant: true,
+            linkage: "program",
+            value: Struct([I("i32", "0"), I("i32", "0")]),
+        },
+        Global {
+            name: "NAMES",
+            ty: Array(Slice("write", Char), 2),
+            constant: false,
+            linkage: "program",
+        },
+    ],
+    uses: [],
+    imports: ["core"],
+    quantum: false,
+    quantum_only: [],
+    source: Absent,
+}

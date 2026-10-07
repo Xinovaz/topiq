@@ -1,0 +1,23 @@
+// expect: exit 0
+// Classical operators on quantum data, run on the exact simulator: each
+// circuit counts the inputs it got right.
+#unit classical
+import circs;
+
+fn main() -> i32 {
+    if circs::sums(0) != 64 { return 1; }
+    if circs::differences(0) != 64 { return 2; }
+    if circs::unary(0) != 72 { return 3; }
+    if circs::pairs(0) != 16 { return 4; }
+    if circs::bits(0) != 28 { return 5; }
+    if circs::widths(0) != 3000 { return 6; }
+    for i in 0..8 {
+        if !circs::copies(0) { return 7; }
+    }
+    for i in 0..8 {
+        if !circs::nested(0) { return 8; }
+        if !circs::variants(0) { return 9; }
+    }
+    if !circs::stamps(0) { return 10; }
+    0
+}

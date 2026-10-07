@@ -1,0 +1,21 @@
+// expect: exit 99
+// Constants and constant functions, all folded before the program runs.
+#unit classical
+
+let WIDTH: const u32 = 12;
+
+fn mask(n: constexpr u32) -> constexpr u64 {
+    (1u64 << n) - 1
+}
+
+fn fact(n: constexpr u64) -> constexpr u64 {
+    if n == 0 { 1 } else { n * fact(n - 1) }
+}
+
+let MASK: const u64 = mask(WIDTH);
+
+fn main() -> i32 {
+    let limit: const u64 = fact(5);
+    // 4095 % 120 is 15; 120 - 15 - 6 is 99.
+    (limit - MASK % limit - 6) as i32
+}

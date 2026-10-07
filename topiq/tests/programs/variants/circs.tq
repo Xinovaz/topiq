@@ -1,0 +1,54 @@
+// Quantum enumerations holding classical data, and quantum structures
+// measured whole.
+#unit quantum
+import gates;
+
+enum Tagged { Plain(qubit), Counted(qubit, u8), Signed(i8, bool) }
+
+struct Pair { a: qubit, r: [qubit; 2], n: u32 }
+
+// Flips the qubit of a counted variant, leaving its count as it is.
+fn flip_counted(t: *Tagged) {
+    match t {
+        Tagged::Plain(p) => { z(p); }
+        Tagged::Counted(p, _) => { x(p); }
+        Tagged::Signed(_, _) => {}
+    }
+}
+
+// The count a variant carries, given as the circuit runs, and its qubit,
+// flipped under the tag's control.
+[entry]
+fn counted(n: u8) -> (bool, u8) {
+    let q: qubit;
+    let t = Tagged::Counted(q, n);
+    flip_counted(&t);
+    match measure t {
+        Tagged::Plain(p) => { let b = measure p; (b, 0) }
+        Tagged::Counted(p, k) => { let b = measure p; (b, k) }
+        Tagged::Signed(_, _) => (false, 0),
+    }
+}
+
+// A negative number and a flag, held as basis states and read back.
+[entry]
+fn signed(n: u32) -> (i8, bool) {
+    let t = Tagged::Signed(-3, true);
+    match measure t {
+        Tagged::Signed(v, f) => (v, f),
+        Tagged::Plain(p) => { forget p; (0, false) }
+        Tagged::Counted(p, _) => { forget p; (0, false) }
+    }
+}
+
+// A structure measured whole: its qubits read, its count kept.
+[entry]
+fn pair(n: u32) -> (bool, bool, bool, u32) {
+    let a: qubit;
+    let r: [qubit; 2];
+    x(&a);
+    x(&r[1]);
+    let p = Pair { a: a, r: r, n: 41 };
+    let (x0, bits, count) = measure p;
+    (x0, bits[0], bits[1], count + 1)
+}
